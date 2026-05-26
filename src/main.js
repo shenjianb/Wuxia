@@ -434,6 +434,24 @@ function filterAnimationTracks(clip, model) {
             values[i * stride + 1] = track.values[i * stride + 1] - (config.bakeIntoPoseY  ? driftRateY * t : 0);
             values[i * stride + 2] = track.values[i * stride + 2] - (config.bakeIntoPoseXZ ? driftRateZ * t : 0);
           }
+          
+          // ═══ 振幅缩减（Sway Scale）═══
+          // Root 骨骼去趋势后的残留振荡会与子骨骼 Pelvis 的自有摆动在父子层级中
+          // 产生叠加放大（Double Oscillation），导致上半身晃动幅度超出美术原始设计。
+          // 通过 rootSwayScale (0~1) 在轨道预处理阶段等比缩减振幅：
+          //   1.0 = 保留全量摆动（脚步最贴地，但上半身晃动最大）
+          //   0.0 = 完全锁定到首帧（等效于删除轨道，脚步会打滑）
+          //   0.6 = 推荐折中（保留 60% 重心偏移用于脚步贴地，消减 40% 叠加晃动）
+          const swayScale = config.rootSwayScale ?? 1.0;
+          if (swayScale < 1.0) {
+            const baseX = values[0], baseY = values[1], baseZ = values[2];
+            for (let i = 1; i < numKeys; i++) {
+              values[i * stride]     = baseX + (values[i * stride]     - baseX) * swayScale;
+              values[i * stride + 1] = baseY + (values[i * stride + 1] - baseY) * swayScale;
+              values[i * stride + 2] = baseZ + (values[i * stride + 2] - baseZ) * swayScale;
+            }
+          }
+          
           return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
         }
       }
@@ -810,10 +828,9 @@ function update(time) {
       skeletonRoot.position.copy(character.rootRestPosition);
       skeletonRoot.quaternion.copy(character.rootRestQuaternion);
     } else if (skeletonRoot) {
-      // In-Place 原地模式：不再强制重置 Root 骨骼
-      // Root 骨骼保留动画数据驱动的自然摆动（重心左右偏移、上下起伏）
-      // 原地效果由 applyFootLock 检测支撑脚并反向补偿实现
-      // 仅记录状态供调试使用
+      // In-Place 原地模式：保留 Root 骨骼的去趋势后摆动数据，不在运行时覆盖
+      // Root 摆动驱动角色重心左右偏移与上下起伏，是脚步贴地的核心依据
+      // 叠加晃动的消减已在 filterAnimationTracks 中通过 rootSwayScale 轨道预处理完成
     }
 
     // 3. 更新过渡混合
@@ -953,8 +970,14 @@ function updatePlayer(delta) {
   // InPlace 模式：代码驱动世界坐标位移
   // 通过 timeScale 步速匹配，使动画播放速率与代码移动速度同步，消除脚底打滑
   const naturalSpeed = computeAnimNaturalSpeed("walk", player);
-  if (naturalSpeed > 0.01) {
-    player.actions.walk.timeScale = PLAYER_SPEED / naturalSpeed;
+  if (naturalSpeed > 0.1) {
+    const targetScale = PLAYER_SPEED / naturalSpeed;
+    player.actions.walk.timeScale = Math.min(Math.max(targetScale, 0.5), 3.0);
+    console.log(`[SpeedMatch] naturalSpeed: ${naturalSpeed.toFixed(4)}, clamped timeScale: ${player.actions.walk.timeScale.toFixed(4)}`);
+  } else {
+    // 针对极低水平位移的动画（如原地醉酒摆动），不进行大幅度步速匹配，恢复 1.0 倍速，防止除以近零值产生时值狂闪
+    player.actions.walk.timeScale = 1.0;
+    console.log(`[SpeedMatch] Low naturalSpeed (${naturalSpeed.toFixed(4)}), default to timeScale 1.0`);
   }
 
   const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.root.rotation.y);
@@ -979,6 +1002,14 @@ function updateAction(character, nextAction) {
   nextAction.reset().fadeIn(0.22).play();
   character.currentAction.fadeOut(0.22);
   character.currentAction = nextAction;
+
+  // 在动作发生切换时，立刻重置根骨骼跟踪状态，确保提取 Root Motion 增量时不产生错误的跨边界巨大跳跃（杜绝人物闪现狂闪）
+  const skeletonRoot = character.scene.getObjectByName(ROOT_TRACK_NAME);
+  if (skeletonRoot) {
+    character.rootMotionState.prevTime = nextAction.time;
+    character.rootMotionState.prevPosition.copy(skeletonRoot.position);
+    character.rootMotionState.prevQuaternion.copy(skeletonRoot.quaternion);
+  }
 }
 
 function updateCamera(delta) {

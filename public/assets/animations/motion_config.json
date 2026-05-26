@@ -4,14 +4,16 @@
     "loop": true,
     "bakeIntoPoseXZ": true,
     "bakeIntoPoseY": true,
-    "bakeIntoPoseRotation": true
+    "bakeIntoPoseRotation": true,
+    "rootSwayScale": 1
   },
   "walk": {
     "motionMode": "InPlace",
     "loop": true,
     "bakeIntoPoseXZ": true,
     "bakeIntoPoseY": true,
-    "bakeIntoPoseRotation": true
+    "bakeIntoPoseRotation": true,
+    "rootSwayScale": 0.6
   },
   "turnLeft": {
     "motionMode": "InPlace",

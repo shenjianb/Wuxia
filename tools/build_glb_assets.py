@@ -17,9 +17,9 @@ MODELS = [
 
 ANIMATIONS = [
     ("Anim_Normal_Idle2", ROOT / "Anim_Normal_Idle2.fbx", "longest", "none"),
-    ("Anim_Normal_Walk_F", ROOT / "Anim_Normal_Walk_F.fbx", "shortest", "none"),
-    ("Anim_Normal_Idle_Turn_L", ROOT / "Anim_Normal_Idle_Turn_L.fbx", "shortest", "none"),
-    ("Anim_Normal_Idle_Turn_R", ROOT / "Anim_Normal_Idle_Turn_R.fbx", "shortest", "none"),
+    ("Anim_Normal_Walk_F", ROOT / "Anim_Normal_Walk_F_0.fbx", "shortest", "none"),
+    ("Anim_Normal_Idle_Turn_L", ROOT / "Anim_Normal_Idle_Turn_L_In.fbx", "shortest", "none"),
+    ("Anim_Normal_Idle_Turn_R", ROOT / "Anim_Normal_Idle_Turn_R_In.fbx", "shortest", "none"),
 ]
 
 RETARGET_MODEL = ROOT / "SK_BaseMan_merged.fbx"
