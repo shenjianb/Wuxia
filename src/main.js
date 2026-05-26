@@ -2,24 +2,33 @@ import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import "./styles.css";
 
+const ASSET_VERSION = "inplace-turn-20260526-30";
+const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
+
 const ASSETS = {
   models: {
-    male: "./assets/models/SK_BaseMale.glb",
-    female: "./assets/models/SK_BaseFemale.glb",
+    male: assetUrl("./assets/models/SK_BaseMale.glb"),
+    female: assetUrl("./assets/models/SK_BaseFemale.glb"),
   },
   animations: {
-    idle: "./assets/animations/Anim_Normal_Idle2.glb",
-    walk: "./assets/animations/Anim_Normal_Walk_F.glb",
+    idle: assetUrl("./assets/animations/Anim_Normal_Idle2.glb"),
+    walk: assetUrl("./assets/animations/Anim_Normal_Walk_F.glb"),
+    turnLeft: assetUrl("./assets/animations/Anim_Normal_Idle_Turn_L.glb"),
+    turnRight: assetUrl("./assets/animations/Anim_Normal_Idle_Turn_R.glb"),
   },
 };
 
 const CHARACTER_HEIGHT = 2.2;
-const PLAYER_SPEED = 2.65;
+const PLAYER_SPEED = 1.7;
 const TURN_SPEED = 2.35;
 const CAMERA_LERP = 4.5;
 const SELECT_TRANSITION_SPEED = 1.25;
 const WORLD_SIZE = 18;
 const TILE_SIZE = 1.35;
+const FOOT_LOCK_BONES = ["Bip001_L_Toe0", "Bip001_R_Toe0", "Bip001_L_Foot", "Bip001_R_Foot"];
+const FOOT_LOCK_CONTACT_Y = 0.09;
+const FOOT_LOCK_RELEASE_Y = 0.17;
+const ROOT_TRACK_NAME = "Root";
 
 const app = document.querySelector("#app");
 const DEBUG_VIEW = new URLSearchParams(window.location.search).has("debug");
@@ -31,7 +40,11 @@ overlay.className = "overlay";
 overlay.innerHTML = `
   <div class="topbar">
     <div class="brand">Wuxia Web3D</div>
-    <div class="badge" data-renderer>WebGPU</div>
+    <div class="runtime-controls">
+      <button class="tool-button" data-root-filter="translation"></button>
+      <button class="tool-button" data-root-filter="rotation"></button>
+      <div class="badge" data-renderer>WebGPU</div>
+    </div>
   </div>
   <div class="panel" data-panel>
     <div class="title">选择主角</div>
@@ -52,6 +65,10 @@ const state = {
     left: false,
     right: false,
   },
+  rootFilters: {
+    translation: false,
+    rotation: true,
+  },
 };
 
 const loader = new GLTFLoader();
@@ -65,6 +82,10 @@ const diagnosticMarker = new THREE.Mesh(
 );
 diagnosticMarker.position.set(0, 0.8, 0);
 if (DEBUG_VIEW) scene.add(diagnosticMarker);
+
+const rootMarker = createRootMarker();
+rootMarker.visible = false;
+scene.add(rootMarker);
 
 const camera = new THREE.OrthographicCamera(-8, 8, 5, -5, 0.1, 80);
 const cameraTarget = new THREE.Vector3();
@@ -92,6 +113,7 @@ let selectionSet;
 let worldSet;
 let player;
 let obstacles = [];
+const rootMarkerWorldPosition = new THREE.Vector3();
 
 boot();
 
@@ -137,20 +159,23 @@ async function boot() {
 }
 
 async function loadAnimations() {
-  const [idleGltf, walkGltf] = await Promise.all([
+  const [idleGltf, walkGltf, turnLeftGltf, turnRightGltf] = await Promise.all([
     loader.loadAsync(ASSETS.animations.idle),
     loader.loadAsync(ASSETS.animations.walk),
+    loader.loadAsync(ASSETS.animations.turnLeft),
+    loader.loadAsync(ASSETS.animations.turnRight),
   ]);
   return {
-    idle: renameClip(idleGltf.animations[0], "idle"),
-    walk: renameClip(walkGltf.animations[0], "walk"),
+    idle: mergeAnimationClips(idleGltf.animations, "idle"),
+    walk: mergeAnimationClips(walkGltf.animations, "walk"),
+    turnLeft: mergeAnimationClips(turnLeftGltf.animations, "turnLeft"),
+    turnRight: mergeAnimationClips(turnRightGltf.animations, "turnRight"),
   };
 }
 
-function renameClip(clip, name) {
-  const clone = clip.clone();
-  clone.name = name;
-  return clone;
+function mergeAnimationClips(clips, name) {
+  const tracks = clips.flatMap((clip) => clip.tracks.map((track) => track.clone()));
+  return new THREE.AnimationClip(name, -1, tracks);
 }
 
 async function createCharacter(gender, url) {
@@ -159,9 +184,8 @@ async function createCharacter(gender, url) {
   root.name = `Character_${gender}`;
   root.add(gltf.scene);
 
-  gltf.scene.rotation.x = Math.PI / 2;
   normalizeModel(gltf.scene);
-  tintCharacter(gltf.scene, gender);
+  if (DEBUG_VIEW) tintCharacter(gltf.scene, gender);
   gltf.scene.traverse((obj) => {
     if (obj.isMesh || obj.isSkinnedMesh) {
       obj.castShadow = true;
@@ -170,10 +194,7 @@ async function createCharacter(gender, url) {
   });
 
   const mixer = new THREE.AnimationMixer(gltf.scene);
-  const actions = {
-    idle: mixer.clipAction(animations.idle),
-    walk: mixer.clipAction(animations.walk),
-  };
+  const actions = createCharacterActions(mixer, gltf.scene);
   if (!DISABLE_ANIMATION) actions.idle.play();
 
   return {
@@ -184,8 +205,68 @@ async function createCharacter(gender, url) {
     actions,
     currentAction: actions.idle,
     desiredAction: actions.idle,
+    footLock: {
+      boneName: null,
+      anchor: new THREE.Vector3(),
+    },
     active: true,
   };
+}
+
+function createCharacterActions(mixer, model) {
+  return {
+    idle: mixer.clipAction(filterAnimationTracks(animations.idle, model)),
+    walk: mixer.clipAction(filterAnimationTracks(animations.walk, model)),
+    turnLeft: mixer.clipAction(filterAnimationTracks(animations.turnLeft, model)),
+    turnRight: mixer.clipAction(filterAnimationTracks(animations.turnRight, model)),
+  };
+}
+
+function rebuildCharacterActions(character) {
+  const nextActionName = getActionName(character, character.desiredAction)
+    ?? getActionName(character, character.currentAction)
+    ?? "idle";
+  character.mixer.stopAllAction();
+  character.actions = createCharacterActions(character.mixer, character.scene);
+  character.currentAction = character.actions[nextActionName] ?? character.actions.idle;
+  character.desiredAction = character.currentAction;
+  if (!DISABLE_ANIMATION) character.currentAction.reset().play();
+  character.footLock.boneName = null;
+}
+
+function rebuildAllCharacterActions() {
+  Object.values(characters ?? {}).forEach((character) => rebuildCharacterActions(character));
+}
+
+function getActionName(character, action) {
+  return Object.entries(character.actions).find(([, candidate]) => candidate === action)?.[0];
+}
+
+function retargetPositionTracks(clip, model) {
+  return filterAnimationTracks(clip, model);
+}
+
+function filterAnimationTracks(clip, model) {
+  const clone = clip.clone();
+  clone.tracks = clone.tracks.map((track) => {
+    const targetName = getTrackTargetName(track.name);
+    if (track.name.endsWith(".scale")) return null;
+    if (targetName === ROOT_TRACK_NAME && isRotationTrack(track.name) && state.rootFilters.rotation) return null;
+    if (targetName === ROOT_TRACK_NAME && track.name.endsWith(".position") && state.rootFilters.translation) return null;
+    if (targetName !== ROOT_TRACK_NAME && track.name.endsWith(".position")) return null;
+    return track;
+  }).filter(Boolean);
+  clone.resetDuration();
+  return clone;
+}
+
+function getTrackTargetName(trackName) {
+  const dotIndex = trackName.lastIndexOf(".");
+  return dotIndex === -1 ? trackName : trackName.slice(0, dotIndex);
+}
+
+function isRotationTrack(trackName) {
+  return trackName.endsWith(".rotation") || trackName.endsWith(".quaternion");
 }
 
 function normalizeModel(model) {
@@ -289,6 +370,26 @@ function createCampfire() {
   return group;
 }
 
+function createRootMarker() {
+  const group = new THREE.Group();
+  group.name = "RootMarker";
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x75f4ff,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const barX = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.035, 0.07), material);
+  const barZ = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.035, 0.86), material);
+  const center = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.16), material);
+  group.add(barX, barZ, center);
+  group.renderOrder = 20;
+  group.traverse((obj) => {
+    obj.renderOrder = 20;
+  });
+  return group;
+}
+
 function createWorldScene() {
   worldSet = new THREE.Group();
   worldSet.name = "GameWorld";
@@ -353,6 +454,15 @@ function bindInput() {
   document.querySelectorAll("[data-choice]").forEach((button) => {
     button.addEventListener("click", () => chooseGender(button.dataset.choice));
   });
+  document.querySelectorAll("[data-root-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.rootFilter;
+      state.rootFilters[key] = !state.rootFilters[key];
+      updateRootFilterButtons();
+      rebuildAllCharacterActions();
+    });
+  });
+  updateRootFilterButtons();
 
   window.addEventListener("keydown", (event) => {
     if (event.code === "Space") state.keys.forward = true;
@@ -369,6 +479,17 @@ function bindInput() {
   });
 
   window.addEventListener("resize", resize);
+}
+
+function updateRootFilterButtons() {
+  document.querySelectorAll("[data-root-filter]").forEach((button) => {
+    const key = button.dataset.rootFilter;
+    const filtered = state.rootFilters[key];
+    button.classList.toggle("active", !filtered);
+    button.textContent = key === "translation"
+      ? `Root Pos ${filtered ? "Block" : "Pass"}`
+      : `Root Rot ${filtered ? "Block" : "Pass"}`;
+  });
 }
 
 function update(time) {
@@ -402,9 +523,59 @@ function update(time) {
     cameraTarget.lerp(new THREE.Vector3(player.root.position.x, 1.05, player.root.position.z), 1 - Math.exp(-CAMERA_LERP * delta));
   }
 
+  Object.values(characters ?? {}).forEach((character) => applyFootLock(character));
+  updateRootMarker();
   updateCamera(delta);
   window.__DEMO_STATE = getDebugState();
   renderer.render(scene, camera);
+}
+
+function updateRootMarker() {
+  rootMarker.visible = !!player && player.root.visible;
+  if (!rootMarker.visible) return;
+
+  const skeletonRoot = player.scene.getObjectByName(ROOT_TRACK_NAME);
+  const position = skeletonRoot
+    ? skeletonRoot.getWorldPosition(rootMarkerWorldPosition)
+    : player.root.getWorldPosition(rootMarkerWorldPosition);
+  rootMarker.position.set(position.x, 0.055, position.z);
+}
+
+function applyFootLock(character) {
+  if (!character.active || !character.root.visible) return;
+
+  character.root.updateMatrixWorld(true);
+  const contacts = FOOT_LOCK_BONES
+    .map((boneName) => {
+      const bone = character.scene.getObjectByName(boneName);
+      if (!bone) return null;
+      return {
+        boneName,
+        position: bone.getWorldPosition(new THREE.Vector3()),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.position.y - b.position.y);
+
+  if (!contacts.length) return;
+
+  const locked = contacts.find((contact) => contact.boneName === character.footLock.boneName);
+  if (!locked || locked.position.y > FOOT_LOCK_RELEASE_Y) {
+    const next = contacts.find((contact) => contact.position.y <= FOOT_LOCK_CONTACT_Y);
+    if (!next) {
+      character.footLock.boneName = null;
+      return;
+    }
+    character.footLock.boneName = next.boneName;
+    character.footLock.anchor.copy(next.position);
+    return;
+  }
+
+  if (locked.position.y > FOOT_LOCK_CONTACT_Y) return;
+
+  character.root.position.x += character.footLock.anchor.x - locked.position.x;
+  character.root.position.z += character.footLock.anchor.z - locked.position.z;
+  character.root.updateMatrixWorld(true);
 }
 
 function getDebugState() {
@@ -414,6 +585,9 @@ function getDebugState() {
     cameraTarget: cameraTarget.toArray(),
     markerPosition: diagnosticMarker.position.toArray(),
     markerVisible: diagnosticMarker.visible && diagnosticMarker.parent !== null,
+    rootMarkerPosition: rootMarker.position.toArray(),
+    rootMarkerVisible: rootMarker.visible,
+    rootFilters: { ...state.rootFilters },
     characterBounds: characters
       ? Object.fromEntries(Object.entries(characters).map(([key, character]) => {
         const box = new THREE.Box3().setFromObject(character.root);
@@ -430,7 +604,17 @@ function updatePlayer(delta) {
   player.root.rotation.y += turn * TURN_SPEED * delta;
 
   const moving = state.keys.forward;
-  player.desiredAction = moving ? player.actions.walk : player.actions.idle;
+  const turningLeft = state.keys.left && !state.keys.right;
+  const turningRight = state.keys.right && !state.keys.left;
+  if (moving) {
+    player.desiredAction = player.actions.walk;
+  } else if (turningLeft) {
+    player.desiredAction = player.actions.turnLeft;
+  } else if (turningRight) {
+    player.desiredAction = player.actions.turnRight;
+  } else {
+    player.desiredAction = player.actions.idle;
+  }
 
   if (!moving) return;
 

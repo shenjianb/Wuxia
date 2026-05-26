@@ -4,20 +4,21 @@ import bpy
 
 
 ROOT = Path(__file__).resolve().parents[1]
+UNUSED = ROOT / "Unused"
 
 
 PAIRS = [
     {
-        "base": ROOT / "SK_BaseMan.fbx",
-        "body": ROOT / "SK_BaseMan_body.fbx",
+        "base": UNUSED / "SK_BaseMan.fbx",
+        "body": UNUSED / "SK_BaseMan_body.fbx",
         "output": ROOT / "SK_BaseMan_merged.fbx",
         "mesh_name": "SK_BaseMan_merged",
         "base_material": "SK_BaseMan",
         "body_material": "SK_BaseMan_body",
     },
     {
-        "base": ROOT / "SK_BaseFemale.fbx",
-        "body": ROOT / "SK_BaseFemale_body.fbx",
+        "base": UNUSED / "SK_BaseFemale.fbx",
+        "body": UNUSED / "SK_BaseFemale_body.fbx",
         "output": ROOT / "SK_BaseFemale_merged.fbx",
         "mesh_name": "SK_BaseFemale_merged",
         "base_material": "SK_BaseFemale",

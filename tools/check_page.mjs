@@ -77,6 +77,17 @@ async function main() {
     await wait(500);
   }
 
+  if (process.argv.includes("--turn-left")) {
+    await send("Runtime.evaluate", {
+      expression: `window.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));`,
+    });
+    await wait(1500);
+    await send("Runtime.evaluate", {
+      expression: `window.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft' }));`,
+    });
+    await wait(500);
+  }
+
   const status = await send("Runtime.evaluate", {
     expression: `({
       ready: window.__DEMO_READY,

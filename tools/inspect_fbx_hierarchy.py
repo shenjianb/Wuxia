@@ -21,7 +21,10 @@ def object_path(obj):
 
 def inspect(path: Path):
     reset_scene()
-    bpy.ops.import_scene.fbx(filepath=str(path))
+    if path.suffix.lower() in {".glb", ".gltf"}:
+        bpy.ops.import_scene.gltf(filepath=str(path))
+    else:
+        bpy.ops.import_scene.fbx(filepath=str(path))
     armatures = [obj for obj in bpy.context.scene.objects if obj.type == "ARMATURE"]
     actions = []
     for action in bpy.data.actions:
