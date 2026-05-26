@@ -1,0 +1,30 @@
+{
+  "idle": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true
+  },
+  "walk": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true
+  },
+  "turnLeft": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true
+  },
+  "turnRight": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true
+  }
+}
