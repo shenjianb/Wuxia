@@ -2,18 +2,26 @@
   "idle": {
     "motionMode": "InPlace",
     "loop": true,
-    "bakeIntoPoseXZ": true,
-    "bakeIntoPoseY": true,
-    "bakeIntoPoseRotation": true,
-    "rootSwayScale": 1
+    "bakeIntoPoseXZ": false,
+    "bakeIntoPoseY": false,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5,
+    "footLock": false,
+    "visualYawOffsetDegrees": 0
   },
   "walk": {
     "motionMode": "InPlace",
     "loop": true,
     "bakeIntoPoseXZ": true,
     "bakeIntoPoseY": true,
-    "bakeIntoPoseRotation": true,
-    "rootSwayScale": 0.6
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5,
+    "footLock": false,
+    "footLockStrength": 1,
+    "codeMoveSpeed": 2,
+    "codeMoveBasis": "characterForward",
+    "codeMoveYawOffsetDegrees": 0,
+    "visualYawOffsetDegrees": 0
   },
   "turnLeft": {
     "motionMode": "InPlace",
@@ -28,5 +36,94 @@
     "bakeIntoPoseXZ": true,
     "bakeIntoPoseY": true,
     "bakeIntoPoseRotation": true
+  },
+  "combatIdle": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "visualYawOffsetDegrees": 0,
+    "footLock": true,
+    "footLockContactY": 0.09,
+    "footLockReleaseY": 0.14,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5,
+    "rootPoseRotation": false,
+    "rootMotionForwardOnly": false,
+    "rootMotionMoveBasis": "clipRootDelta"
+  },
+  "combatWalk": {
+    "motionMode": "RootMotion",
+    "loop": true,
+    "visualYawOffsetDegrees": 0,
+    "applyRootRotation": false,
+    "rootPoseRotation": true,
+    "rootPoseRotationAnchor": "clipStart",
+    "rootPoseRotationScale": 1,
+    "rootMotionMoveBasis": "clipRootDelta",
+    "rootMotionForwardOnly": true,
+    "codeMoveBasis": "characterForward",
+    "codeMoveYawOffsetDegrees": 0,
+    "codeMoveSpeed": 1,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true,
+    "rootSwayScale": 0
+  },
+  "combatTurnLeft": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "visualYawOffsetDegrees": 0,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1
+  },
+  "combatTurnRight": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "visualYawOffsetDegrees": 0,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1
+  },
+  "combat_Att_F_Hand_0": {
+    "motionMode": "InPlace",
+    "loop": false,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5
+  },
+  "combat_Att_F_Hand_1": {
+    "motionMode": "RootMotion",
+    "loop": false,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5,
+    "footLock": false,
+    "applyRootRotation": false,
+    "rootPoseRotation": true,
+    "rootPoseRotationAnchor": "clipStart",
+    "rootMotionMoveBasis": "characterForward",
+    "visualYawOffsetDegrees": 0
+  },
+  "combat_Att_LB_Hand_0": {
+    "motionMode": "InPlace",
+    "loop": false,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1
+  },
+  "combat_Att_RB_Hand_0": {
+    "motionMode": "InPlace",
+    "loop": false,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1
   }
 }

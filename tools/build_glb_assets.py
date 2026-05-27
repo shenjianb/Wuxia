@@ -5,24 +5,33 @@ from mathutils import Matrix, Quaternion, Vector
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FBX_DIR = ROOT / "FBX"
 PUBLIC = ROOT / "public" / "assets"
 MODEL_DIR = PUBLIC / "models"
 ANIM_DIR = PUBLIC / "animations"
 
 
 MODELS = [
-    ("SK_BaseMale", ROOT / "SK_BaseMan_merged.fbx"),
-    ("SK_BaseFemale", ROOT / "SK_BaseFemale_merged.fbx"),
+    ("SK_BaseMale", FBX_DIR / "SK_BaseMan_merged.fbx"),
+    ("SK_BaseFemale", FBX_DIR / "SK_BaseFemale_merged.fbx"),
 ]
 
 ANIMATIONS = [
-    ("Anim_Normal_Idle2", ROOT / "Anim_Normal_Idle2.fbx", "longest", "none"),
-    ("Anim_Normal_Walk_F", ROOT / "Anim_Normal_Walk_F_0.fbx", "shortest", "none"),
-    ("Anim_Normal_Idle_Turn_L", ROOT / "Anim_Normal_Idle_Turn_L_In.fbx", "shortest", "none"),
-    ("Anim_Normal_Idle_Turn_R", ROOT / "Anim_Normal_Idle_Turn_R_In.fbx", "shortest", "none"),
+    ("Anim_Normal_Idle2", FBX_DIR / "Anim_Normal_Idle2.fbx", "longest", "none"),
+    ("Anim_Normal_Walk_F", FBX_DIR / "Anim_Normal_Walk_F_0.fbx", "shortest", "none"),
+    ("Anim_Normal_Idle_Turn_L", FBX_DIR / "Anim_Normal_Idle_Turn_L_In.fbx", "shortest", "none"),
+    ("Anim_Normal_Idle_Turn_R", FBX_DIR / "Anim_Normal_Idle_Turn_R_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Idle_Hand", FBX_DIR / "Anim_Combat_Idle_Hand.fbx", "longest", "none"),
+    ("Anim_Combat_Walk_Short_F_Hand", FBX_DIR / "Anim_Combat_Walk_Short_F_Hand.fbx", "shortest", "none"),
+    ("Anim_Combat_Idle_Turn_L_Hand", FBX_DIR / "Anim_Combat_Idle_Turn_L_Hand_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Idle_Turn_R_Hand", FBX_DIR / "Anim_Combat_Idle_Turn_R_Hand_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_F_Hand_0", FBX_DIR / "Anim_Combat_Att_F_Hand_0_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_F_Hand_1", FBX_DIR / "Anim_Combat_Att_F_Hand_1_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_RB_Hand_0", FBX_DIR / "Anim_Combat_Att_RB_Hand_0_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_LB_Hand_0", FBX_DIR / "Anim_Combat_Att_LB_Hand_0_In.fbx", "shortest", "none"),
 ]
 
-RETARGET_MODEL = ROOT / "SK_BaseMan_merged.fbx"
+RETARGET_MODEL = FBX_DIR / "SK_BaseMan_merged.fbx"
 
 
 def reset_scene():

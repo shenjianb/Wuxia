@@ -89,6 +89,11 @@ canvas {
   color: #ef6351;
 }
 
+.badge.active {
+  border-color: rgba(129, 199, 132, 0.62);
+  color: #b9f6ca;
+}
+
 .panel {
   position: absolute;
   left: 50%;

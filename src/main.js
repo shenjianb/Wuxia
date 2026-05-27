@@ -1,8 +1,9 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { createFacingMarker } from "./facing-marker.js";
 import "./styles.css";
 
-const ASSET_VERSION = "inplace-turn-20260526-30";
+const ASSET_VERSION = "combat-interaction-20260527-01";
 const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
 
 const ASSETS = {
@@ -15,6 +16,13 @@ const ASSETS = {
     walk: assetUrl("./assets/animations/Anim_Normal_Walk_F.glb"),
     turnLeft: assetUrl("./assets/animations/Anim_Normal_Idle_Turn_L.glb"),
     turnRight: assetUrl("./assets/animations/Anim_Normal_Idle_Turn_R.glb"),
+    combatIdle: assetUrl("./assets/animations/Anim_Combat_Idle_Hand.glb"),
+    combatWalk: assetUrl("./assets/animations/Anim_Combat_Walk_Short_F_Hand.glb"),
+    combatTurnLeft: assetUrl("./assets/animations/Anim_Combat_Idle_Turn_L_Hand.glb"),
+    combatTurnRight: assetUrl("./assets/animations/Anim_Combat_Idle_Turn_R_Hand.glb"),
+    combat_Att_F_Hand_1: assetUrl("./assets/animations/Anim_Combat_Att_F_Hand_1.glb"),
+    combat_Att_LB_Hand_0: assetUrl("./assets/animations/Anim_Combat_Att_LB_Hand_0.glb"),
+    combat_Att_RB_Hand_0: assetUrl("./assets/animations/Anim_Combat_Att_RB_Hand_0.glb"),
   },
 };
 
@@ -29,6 +37,20 @@ const FOOT_LOCK_BONES = ["Bip001_L_Toe0", "Bip001_R_Toe0", "Bip001_L_Foot", "Bip
 const FOOT_LOCK_CONTACT_Y = 0.09;
 const FOOT_LOCK_RELEASE_Y = 0.17;
 const ROOT_TRACK_NAME = "Root";
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const ACTION_FADE_DURATION = 0.22;
+const ROOT_MOTION_BLEND_OUT_GRACE = ACTION_FADE_DURATION + 0.1;
+const COMBAT_ATTACK_RECOVERY_DURATION = 0.3;
+const COMBAT_ATTACK_INPUTS = {
+  KeyW: { direction: "forward", actionName: "combat_Att_F_Hand_1" },
+  KeyA: { direction: "leftBack", actionName: "combat_Att_LB_Hand_0" },
+  KeyD: { direction: "rightBack", actionName: "combat_Att_RB_Hand_0" },
+};
+const COMBAT_ATTACK_DIRECTIONS = Object.values(COMBAT_ATTACK_INPUTS).map((input) => input.direction);
+const COMBAT_ATTACK_ACTION_BY_DIRECTION = Object.fromEntries(
+  Object.values(COMBAT_ATTACK_INPUTS).map((input) => [input.direction, input.actionName]),
+);
+const COMBAT_ATTACK_ACTION_NAMES = new Set(Object.values(COMBAT_ATTACK_ACTION_BY_DIRECTION));
 
 const app = document.querySelector("#app");
 const DEBUG_VIEW = new URLSearchParams(window.location.search).has("debug");
@@ -42,6 +64,7 @@ overlay.innerHTML = `
     <div class="brand">Wuxia Web3D</div>
     <div class="runtime-controls">
       <div class="badge" data-renderer>WebGPU</div>
+      <div class="badge" data-combat-mode>Normal</div>
     </div>
   </div>
   <div class="panel" data-panel>
@@ -68,6 +91,19 @@ const state = {
     rotation: true,
   },
   globalMotionMode: "InPlace",
+  combatMode: false,
+  combatAttack: {
+    keys: {
+      forward: false,
+      leftBack: false,
+      rightBack: false,
+    },
+    active: false,
+    activeDirection: null,
+    activeActionName: null,
+    queuedDirection: null,
+    recoveryTimer: 0,
+  },
 };
 
 const loader = new GLTFLoader();
@@ -85,6 +121,10 @@ if (DEBUG_VIEW) scene.add(diagnosticMarker);
 const rootMarker = createRootMarker();
 rootMarker.visible = false;
 scene.add(rootMarker);
+
+const facingMarker = createFacingMarker(THREE, { renderOrder: 2 });
+facingMarker.visible = false;
+scene.add(facingMarker);
 
 const camera = new THREE.OrthographicCamera(-8, 8, 5, -5, 0.1, 80);
 const cameraTarget = new THREE.Vector3();
@@ -114,6 +154,7 @@ let worldSet;
 let player;
 let obstacles = [];
 const rootMarkerWorldPosition = new THREE.Vector3();
+const facingMarkerWorldPosition = new THREE.Vector3();
 
 boot();
 
@@ -149,7 +190,14 @@ async function boot() {
         idle: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
         walk: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
         turnLeft: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
-        turnRight: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true }
+        turnRight: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
+        combatIdle: { motionMode: "InPlace", loop: true, visualYawOffsetDegrees: -50, footLock: true, footLockContactY: 0.09, footLockReleaseY: 0.14, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false },
+        combatWalk: { motionMode: "RootMotion", loop: true, visualYawOffsetDegrees: -50, applyRootRotation: false, rootPoseRotation: true, rootPoseRotationAnchor: "clipStart", rootPoseRotationScale: 1, rootMotionMoveBasis: "clipRootDelta", rootMotionForwardOnly: true, codeMoveBasis: "characterForward", codeMoveYawOffsetDegrees: 0, codeMoveSpeed: 1, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
+        combatTurnLeft: { motionMode: "InPlace", loop: true, visualYawOffsetDegrees: -50, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
+        combatTurnRight: { motionMode: "InPlace", loop: true, visualYawOffsetDegrees: -50, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
+        combat_Att_F_Hand_1: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1.5 },
+        combat_Att_LB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 },
+        combat_Att_RB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 }
       };
     }
 
@@ -164,6 +212,7 @@ async function boot() {
     window.__DEMO_STATE = getDebugState();
     document.body.dataset.ready = "true";
     bindInput();
+    updateCombatModeUI();
     resize();
     renderer.render(scene, camera);
     await renderer.setAnimationLoop(update);
@@ -176,17 +225,43 @@ async function boot() {
 }
 
 async function loadAnimations() {
-  const [idleGltf, walkGltf, turnLeftGltf, turnRightGltf] = await Promise.all([
+  const [
+    idleGltf,
+    walkGltf,
+    turnLeftGltf,
+    turnRightGltf,
+    combatIdleGltf,
+    combatWalkGltf,
+    combatTurnLeftGltf,
+    combatTurnRightGltf,
+    combatAttackForwardGltf,
+    combatAttackLeftBackGltf,
+    combatAttackRightBackGltf,
+  ] = await Promise.all([
     loader.loadAsync(ASSETS.animations.idle),
     loader.loadAsync(ASSETS.animations.walk),
     loader.loadAsync(ASSETS.animations.turnLeft),
     loader.loadAsync(ASSETS.animations.turnRight),
+    loader.loadAsync(ASSETS.animations.combatIdle),
+    loader.loadAsync(ASSETS.animations.combatWalk),
+    loader.loadAsync(ASSETS.animations.combatTurnLeft),
+    loader.loadAsync(ASSETS.animations.combatTurnRight),
+    loader.loadAsync(ASSETS.animations.combat_Att_F_Hand_1),
+    loader.loadAsync(ASSETS.animations.combat_Att_LB_Hand_0),
+    loader.loadAsync(ASSETS.animations.combat_Att_RB_Hand_0),
   ]);
   return {
     idle: mergeAnimationClips(idleGltf.animations, "idle"),
     walk: mergeAnimationClips(walkGltf.animations, "walk"),
     turnLeft: mergeAnimationClips(turnLeftGltf.animations, "turnLeft"),
     turnRight: mergeAnimationClips(turnRightGltf.animations, "turnRight"),
+    combatIdle: mergeAnimationClips(combatIdleGltf.animations, "combatIdle"),
+    combatWalk: mergeAnimationClips(combatWalkGltf.animations, "combatWalk"),
+    combatTurnLeft: mergeAnimationClips(combatTurnLeftGltf.animations, "combatTurnLeft"),
+    combatTurnRight: mergeAnimationClips(combatTurnRightGltf.animations, "combatTurnRight"),
+    combat_Att_F_Hand_1: mergeAnimationClips(combatAttackForwardGltf.animations, "combat_Att_F_Hand_1"),
+    combat_Att_LB_Hand_0: mergeAnimationClips(combatAttackLeftBackGltf.animations, "combat_Att_LB_Hand_0"),
+    combat_Att_RB_Hand_0: mergeAnimationClips(combatAttackRightBackGltf.animations, "combat_Att_RB_Hand_0"),
   };
 }
 
@@ -272,6 +347,89 @@ function calculateClipRootCycle(clip) {
   return clip._rootCycleData;
 }
 
+function sampleClipRootMotion(clip, time) {
+  const posTrack = clip.tracks.find((track) => track.name === "Root.position");
+  const rotTrack = clip.tracks.find((track) => track.name === "Root.quaternion" || track.name === "Root.rotation");
+  const sampleTime = clip.duration > 0 ? THREE.MathUtils.clamp(time, 0, clip.duration) : 0;
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+
+  if (posTrack) {
+    const value = getTrackValueAtTime(posTrack, sampleTime);
+    if (value) position.fromArray(value);
+  }
+
+  if (rotTrack) {
+    const value = getTrackValueAtTime(rotTrack, sampleTime);
+    if (value?.length === 4) {
+      quaternion.fromArray(value).normalize();
+    } else if (value?.length === 3) {
+      quaternion.setFromEuler(new THREE.Euler().fromArray(value));
+    }
+  }
+
+  return { position, quaternion };
+}
+
+function getDetrendedRootPose(clip, time, config = {}) {
+  const sample = sampleClipRootMotion(clip, time).position;
+  const cycleData = calculateClipRootCycle(clip);
+  if (clip.duration <= 0) return sample;
+
+  const alpha = THREE.MathUtils.clamp(time / clip.duration, 0, 1);
+  if (config.bakeIntoPoseXZ !== false) {
+    sample.x -= cycleData.cyclePosition.x * alpha;
+    sample.z -= cycleData.cyclePosition.z * alpha;
+  }
+  if (config.bakeIntoPoseY) {
+    sample.y -= cycleData.cyclePosition.y * alpha;
+  }
+
+  const swayScale = config.rootSwayScale ?? 1;
+  if (swayScale < 1) {
+    sample.x = cycleData.startPosition.x + (sample.x - cycleData.startPosition.x) * swayScale;
+    sample.y = cycleData.startPosition.y + (sample.y - cycleData.startPosition.y) * swayScale;
+    sample.z = cycleData.startPosition.z + (sample.z - cycleData.startPosition.z) * swayScale;
+  }
+
+  return sample;
+}
+
+function getRootPoseQuaternion(clip, time, config = {}, anchorQuaternion = new THREE.Quaternion()) {
+  if (!config.rootPoseRotation) return anchorQuaternion.clone();
+
+  const cycleData = calculateClipRootCycle(clip);
+  const currRot = sampleClipRootMotion(clip, time).quaternion;
+  const deltaRot = new THREE.Quaternion()
+    .copy(cycleData.startRotation)
+    .invert()
+    .premultiply(currRot);
+  const poseRot = deltaRot.multiply(anchorQuaternion).normalize();
+  const scale = THREE.MathUtils.clamp(config.rootPoseRotationScale ?? 1, 0, 1);
+
+  return anchorQuaternion.clone().slerp(poseRot, scale);
+}
+
+function getRootPoseRotationAnchorQuaternion(clip, config = {}, fallbackQuaternion = new THREE.Quaternion()) {
+  if (config.rootPoseRotationAnchor === "clipStart") {
+    return sampleClipRootMotion(clip, 0).quaternion;
+  }
+  return fallbackQuaternion.clone();
+}
+
+function getInPlaceRootPoseQuaternion(clip, time, config = {}, restQuaternion = new THREE.Quaternion()) {
+  if (!clip || config.bakeIntoPoseRotation !== false) {
+    return restQuaternion.clone();
+  }
+
+  const hasRootRotationTrack = clip.tracks.some((track) =>
+    track.name === "Root.quaternion" || track.name === "Root.rotation",
+  );
+  if (!hasRootRotationTrack) return restQuaternion.clone();
+
+  return sampleClipRootMotion(clip, time).quaternion;
+}
+
 // 计算动画的固有世界行走速度（XZ 平面），用于 InPlace 模式的步速匹配
 // 对标 Unity Animator 的 Speed 参数和 UE 的 Sync Group 机制
 function computeAnimNaturalSpeed(clipName, character) {
@@ -287,6 +445,111 @@ function computeAnimNaturalSpeed(clipName, character) {
   const worldDisp = localDisp.clone().applyMatrix3(m3);
   const xzDist = Math.sqrt(worldDisp.x * worldDisp.x + worldDisp.z * worldDisp.z);
   return xzDist / clip.duration;
+}
+
+function getConfiguredCodeMoveDirection(actionName, character) {
+  const config = motionConfig[actionName] || {};
+  const localDirection = new THREE.Vector3(0, 0, 1);
+
+  if (config.codeMoveBasis === "clipRootDelta") {
+    const clip = animations[actionName];
+    if (clip) {
+      const cycleDelta = calculateClipRootCycle(clip).cyclePosition.clone();
+      cycleDelta.y = 0;
+      if (cycleDelta.lengthSq() > 0.000001) {
+        localDirection.copy(cycleDelta.normalize());
+      }
+    }
+  }
+
+  if (Array.isArray(config.codeMoveLocalDirection) && config.codeMoveLocalDirection.length >= 3) {
+    localDirection.set(
+      Number(config.codeMoveLocalDirection[0]) || 0,
+      Number(config.codeMoveLocalDirection[1]) || 0,
+      Number(config.codeMoveLocalDirection[2]) || 0,
+    );
+    localDirection.y = 0;
+    if (localDirection.lengthSq() <= 0.000001) localDirection.set(0, 0, 1);
+    localDirection.normalize();
+  }
+
+  const yawOffset = THREE.MathUtils.degToRad(config.codeMoveYawOffsetDegrees ?? 0);
+  return localDirection
+    .applyAxisAngle(WORLD_UP, yawOffset)
+    .applyAxisAngle(WORLD_UP, character.root.rotation.y)
+    .normalize();
+}
+
+function getConfiguredCodeMoveSpeed(actionName) {
+  const config = motionConfig[actionName] || {};
+  const speed = Number(config.codeMoveSpeed);
+  return Number.isFinite(speed) && speed >= 0 ? speed : PLAYER_SPEED;
+}
+
+function hasConfiguredCodeMoveSpeed(actionName) {
+  const config = motionConfig[actionName] || {};
+  const speed = Number(config.codeMoveSpeed);
+  return Number.isFinite(speed) && speed >= 0;
+}
+
+function getRootMotionDeltaWorld(actionName, character, deltaPos) {
+  const config = motionConfig[actionName] || {};
+  character.scene.updateMatrixWorld(true);
+  const sceneScale = character.scene.getWorldScale(new THREE.Vector3());
+  const scaledLocalDelta = new THREE.Vector3(
+    deltaPos.x * sceneScale.x,
+    0,
+    deltaPos.z * sceneScale.z,
+  );
+
+  if (config.rootMotionMoveBasis === "characterForward") {
+    const clip = animations[actionName];
+    const cycleDelta = clip
+      ? calculateClipRootCycle(clip).cyclePosition.clone()
+      : new THREE.Vector3(0, 0, 1);
+    cycleDelta.y = 0;
+    if (cycleDelta.lengthSq() <= 0.000001) cycleDelta.set(0, 0, 1);
+    cycleDelta.normalize();
+
+    let signedDistance = scaledLocalDelta.dot(cycleDelta);
+    if (config.rootMotionForwardOnly) signedDistance = Math.max(0, signedDistance);
+    if (Math.abs(signedDistance) <= 0.000001) return new THREE.Vector3();
+    return getConfiguredCodeMoveDirection(actionName, character).multiplyScalar(signedDistance);
+  }
+
+  const clip = animations[actionName];
+  const localDelta = scaledLocalDelta.clone();
+  if (config.rootMotionForwardOnly && clip) {
+    const cycleDelta = calculateClipRootCycle(clip).cyclePosition.clone();
+    cycleDelta.y = 0;
+    if (cycleDelta.lengthSq() > 0.000001) {
+      cycleDelta.normalize();
+      const signedDistance = localDelta.dot(cycleDelta);
+      if (signedDistance < 0) localDelta.addScaledVector(cycleDelta, -signedDistance);
+    }
+  }
+
+  return localDelta
+    .applyAxisAngle(WORLD_UP, character.sceneRestRotationY ?? 0)
+    .applyQuaternion(character.root.quaternion);
+}
+
+function getConfiguredVisualYawOffset(actionName) {
+  const config = motionConfig[actionName] || {};
+  return THREE.MathUtils.degToRad(config.visualYawOffsetDegrees ?? 0);
+}
+
+function getMotionMode(actionName) {
+  return motionConfig[actionName]?.motionMode ?? "InPlace";
+}
+
+function updateVisualYawOffset(character, delta) {
+  const actionName = getActionName(character, character.desiredAction)
+    ?? getActionName(character, character.currentAction)
+    ?? "idle";
+  const target = getConfiguredVisualYawOffset(actionName);
+  character.visualYawOffset = THREE.MathUtils.damp(character.visualYawOffset, target, 12, delta);
+  character.scene.rotation.y = character.sceneRestRotationY + character.visualYawOffset;
 }
 
 async function createCharacter(gender, url) {
@@ -325,12 +588,19 @@ async function createCharacter(gender, url) {
     footLock: {
       boneName: null,
       anchor: new THREE.Vector3(),
+      anchors: new Map(),
+      cooldown: 0,
     },
+    rootMotionBlendOut: 0,
     rootMotionState: {
       prevTime: 0,
       prevPosition: new THREE.Vector3(),
       prevQuaternion: new THREE.Quaternion(),
+      poseAnchor: new THREE.Vector3(),
+      poseAnchorQuaternion: new THREE.Quaternion(),
     },
+    sceneRestRotationY: gltf.scene.rotation.y,
+    visualYawOffset: 0,
     rootRestPosition,
     rootRestQuaternion,
     active: true,
@@ -338,12 +608,29 @@ async function createCharacter(gender, url) {
 }
 
 function createCharacterActions(mixer, model) {
-  return {
+  const actions = {
     idle: mixer.clipAction(filterAnimationTracks(animations.idle, model)),
     walk: mixer.clipAction(filterAnimationTracks(animations.walk, model)),
     turnLeft: mixer.clipAction(filterAnimationTracks(animations.turnLeft, model)),
     turnRight: mixer.clipAction(filterAnimationTracks(animations.turnRight, model)),
+    combatIdle: mixer.clipAction(filterAnimationTracks(animations.combatIdle, model)),
+    combatWalk: mixer.clipAction(filterAnimationTracks(animations.combatWalk, model)),
+    combatTurnLeft: mixer.clipAction(filterAnimationTracks(animations.combatTurnLeft, model)),
+    combatTurnRight: mixer.clipAction(filterAnimationTracks(animations.combatTurnRight, model)),
+    combat_Att_F_Hand_1: mixer.clipAction(filterAnimationTracks(animations.combat_Att_F_Hand_1, model)),
+    combat_Att_LB_Hand_0: mixer.clipAction(filterAnimationTracks(animations.combat_Att_LB_Hand_0, model)),
+    combat_Att_RB_Hand_0: mixer.clipAction(filterAnimationTracks(animations.combat_Att_RB_Hand_0, model)),
   };
+  Object.entries(actions).forEach(([actionName, action]) => configureAnimationAction(actionName, action));
+  return actions;
+}
+
+function configureAnimationAction(actionName, action) {
+  const config = motionConfig[actionName] || {};
+  action.clampWhenFinished = config.loop === false;
+  action.setLoop(config.loop === false ? THREE.LoopOnce : THREE.LoopRepeat, config.loop === false ? 1 : Infinity);
+  action.timeScale = 1;
+  action.paused = false;
 }
 
 function rebuildCharacterActions(character) {
@@ -361,10 +648,15 @@ function rebuildCharacterActions(character) {
     character.rootMotionState.prevTime = character.currentAction.time;
     character.rootMotionState.prevPosition.copy(skeletonRoot.position);
     character.rootMotionState.prevQuaternion.copy(skeletonRoot.quaternion);
+    character.rootMotionState.poseAnchor.copy(skeletonRoot.position);
+    character.rootMotionState.poseAnchorQuaternion.copy(skeletonRoot.quaternion);
   }
 
   if (!DISABLE_ANIMATION) character.currentAction.reset().play();
   character.footLock.boneName = null;
+  character.footLock.anchors.clear();
+  character.footLock.cooldown = 0;
+  character.rootMotionBlendOut = 0;
 }
 
 function rebuildAllCharacterActions() {
@@ -396,6 +688,7 @@ function filterAnimationTracks(clip, model) {
     if (targetName === ROOT_TRACK_NAME) {
       if (isRotationTrack(track.name)) {
         if (config.motionMode === "InPlace" && config.bakeIntoPoseRotation) return null;
+        if (config.motionMode === "RootMotion" && config.applyRootRotation === false) return null;
       }
       if (track.name.endsWith(".position") && config.motionMode === "InPlace") {
         // ═══ Unity 式 Bake Into Pose 算法 ═══
@@ -708,12 +1001,174 @@ function updateGlobalMotionModeUI() {
   }
 }
 
+function toggleCombatMode() {
+  if (state.mode !== "game") return;
+  state.combatMode = !state.combatMode;
+  if (!state.combatMode) {
+    cancelCombatAttack({ clearKeys: true });
+  }
+  updateCombatModeUI();
+}
+
+function updateCombatModeUI() {
+  const badge = document.querySelector("[data-combat-mode]");
+  if (!badge) return;
+  badge.classList.toggle("active", state.combatMode);
+  badge.textContent = state.combatMode ? "Combat" : "Normal";
+}
+
+function getCombatAttackInput(code) {
+  return COMBAT_ATTACK_INPUTS[code] ?? null;
+}
+
+function resolveCombatAttackActionName(direction) {
+  // Placeholder for character attack specialty selection. Future character stats,
+  // martial arts, and enemy-type logic can choose a different action here.
+  return COMBAT_ATTACK_ACTION_BY_DIRECTION[direction] ?? null;
+}
+
+function requestCombatAttack(direction) {
+  if (state.mode !== "game" || !state.combatMode) return;
+  state.combatAttack.queuedDirection = direction;
+  if (!state.combatAttack.active) {
+    beginCombatAttack(direction);
+  }
+}
+
+function beginCombatAttack(direction) {
+  const actionName = resolveCombatAttackActionName(direction);
+  const action = player?.actions[actionName];
+  if (!action) return false;
+
+  state.combatAttack.active = true;
+  state.combatAttack.activeDirection = direction;
+  state.combatAttack.activeActionName = actionName;
+  state.combatAttack.queuedDirection = null;
+  state.combatAttack.recoveryTimer = 0;
+
+  configureAnimationAction(actionName, action);
+  if (player.currentAction === action) {
+    restartCharacterAction(player, actionName);
+  } else {
+    action.reset();
+    player.desiredAction = action;
+  }
+  return true;
+}
+
+function restartCharacterAction(character, actionName) {
+  const action = character.actions[actionName];
+  if (!action) return;
+  configureAnimationAction(actionName, action);
+  action.enabled = true;
+  action.paused = false;
+  action.reset().play();
+  character.desiredAction = action;
+  character.currentAction = action;
+}
+
+function finishCombatAttack() {
+  if (!state.combatAttack.active) return;
+  state.combatAttack.active = false;
+  state.combatAttack.activeDirection = null;
+  state.combatAttack.activeActionName = null;
+  state.combatAttack.queuedDirection = null;
+  state.combatAttack.recoveryTimer = COMBAT_ATTACK_RECOVERY_DURATION;
+}
+
+function cancelCombatAttack({ clearKeys = false } = {}) {
+  state.combatAttack.active = false;
+  state.combatAttack.activeDirection = null;
+  state.combatAttack.activeActionName = null;
+  state.combatAttack.queuedDirection = null;
+  state.combatAttack.recoveryTimer = 0;
+  if (clearKeys) {
+    COMBAT_ATTACK_DIRECTIONS.forEach((direction) => {
+      state.combatAttack.keys[direction] = false;
+    });
+  }
+}
+
+function getHeldCombatAttackDirection(preferredDirection = null) {
+  const keys = state.combatAttack.keys;
+  if (preferredDirection && keys[preferredDirection]) return preferredDirection;
+  const queuedDirection = state.combatAttack.queuedDirection;
+  if (queuedDirection && keys[queuedDirection]) return queuedDirection;
+  return COMBAT_ATTACK_DIRECTIONS.find((direction) => keys[direction]) ?? null;
+}
+
+function isCombatAttackAction(actionName) {
+  return COMBAT_ATTACK_ACTION_NAMES.has(actionName);
+}
+
+function isCombatAttackComplete(actionName, action) {
+  const clip = animations[actionName];
+  if (!clip || !action) return true;
+  return action.paused || action.time >= Math.max(0, clip.duration - 0.035);
+}
+
+function updateCombatAttackState() {
+  if (state.mode !== "game" || !state.combatMode) {
+    cancelCombatAttack();
+    return null;
+  }
+
+  const attack = state.combatAttack;
+  if (!attack.active) {
+    const heldDirection = getHeldCombatAttackDirection();
+    if (heldDirection) beginCombatAttack(heldDirection);
+    return attack.activeActionName;
+  }
+
+  const actionName = attack.activeActionName;
+  const action = player?.actions[actionName];
+  if (!action) {
+    finishCombatAttack();
+    return null;
+  }
+
+  player.desiredAction = action;
+  if (player.currentAction !== action || !isCombatAttackComplete(actionName, action)) {
+    return actionName;
+  }
+
+  const nextDirection = getHeldCombatAttackDirection(attack.activeDirection);
+  if (nextDirection) {
+    beginCombatAttack(nextDirection);
+    return state.combatAttack.activeActionName;
+  }
+
+  finishCombatAttack();
+  return null;
+}
+
+function consumeCombatRecoveryControlScale(delta) {
+  const attack = state.combatAttack;
+  if (attack.recoveryTimer <= 0) return 1;
+  const scale = 1 - attack.recoveryTimer / COMBAT_ATTACK_RECOVERY_DURATION;
+  attack.recoveryTimer = Math.max(0, attack.recoveryTimer - delta);
+  return THREE.MathUtils.clamp(scale, 0, 1);
+}
+
 function bindInput() {
   document.querySelectorAll("[data-choice]").forEach((button) => {
     button.addEventListener("click", () => chooseGender(button.dataset.choice));
   });
 
   window.addEventListener("keydown", (event) => {
+    if (event.code === "Tab" && !event.repeat) {
+      event.preventDefault();
+      toggleCombatMode();
+    }
+    const attackInput = getCombatAttackInput(event.code);
+    if (attackInput) {
+      if (state.mode === "game" && state.combatMode) {
+        event.preventDefault();
+        state.combatAttack.keys[attackInput.direction] = true;
+        if (!event.repeat) requestCombatAttack(attackInput.direction);
+      }
+      return;
+    }
     if (event.code === "Space") state.keys.forward = true;
     if (event.code === "ArrowLeft") state.keys.left = true;
     if (event.code === "ArrowRight") state.keys.right = true;
@@ -722,6 +1177,15 @@ function bindInput() {
   });
 
   window.addEventListener("keyup", (event) => {
+    const attackInput = getCombatAttackInput(event.code);
+    if (attackInput) {
+      state.combatAttack.keys[attackInput.direction] = false;
+      if (state.combatAttack.queuedDirection === attackInput.direction) {
+        state.combatAttack.queuedDirection = getHeldCombatAttackDirection();
+      }
+      if (state.mode === "game" && state.combatMode) event.preventDefault();
+      return;
+    }
     if (event.code === "Space") state.keys.forward = false;
     if (event.code === "ArrowLeft") state.keys.left = false;
     if (event.code === "ArrowRight") state.keys.right = false;
@@ -756,6 +1220,9 @@ function update(time) {
 
     // 1. 先更新 Mixer 产生关键帧动画数据
     character.mixer.update(delta);
+    if (character.rootMotionBlendOut > 0) {
+      character.rootMotionBlendOut = Math.max(0, character.rootMotionBlendOut - delta);
+    }
 
     // 2. 根骨骼位移/自转提取（Root Motion Extraction）
     const skeletonRoot = character.scene.getObjectByName(ROOT_TRACK_NAME);
@@ -763,13 +1230,14 @@ function update(time) {
     const actionName = getActionName(character, activeAction);
     const clip = animations[actionName];
     const config = motionConfig[actionName] || { motionMode: "InPlace" };
+    const applyRootRotation = config.applyRootRotation !== false;
 
     if (skeletonRoot && config.motionMode === "RootMotion" && clip) {
       const currTime = activeAction.time;
       const prevTime = character.rootMotionState.prevTime;
-      
-      const currPos = skeletonRoot.position.clone();
-      const currRot = skeletonRoot.quaternion.clone();
+      const rootMotionSample = sampleClipRootMotion(clip, currTime);
+      const currPos = rootMotionSample.position;
+      const currRot = rootMotionSample.quaternion;
       
       const deltaPos = new THREE.Vector3();
       const deltaRot = new THREE.Quaternion();
@@ -791,27 +1259,30 @@ function update(time) {
         const fromStartRot = new THREE.Quaternion().copy(cycleData.startRotation).invert().premultiply(currRot);
         deltaRot.copy(toEndRot).premultiply(fromStartRot);
       }
+      if (!applyRootRotation) {
+        deltaRot.identity();
+      }
       
       // 物理应用旋转与位移（在角色父级组级别）
       // 先将旋转增量从 Root 骨骼局部空间共轭变换到世界空间，然后提取 Yaw
-      character.root.updateMatrixWorld(true);
-      const parentWorldQuat = new THREE.Quaternion().setFromRotationMatrix(character.scene.matrixWorld);
-      const worldDeltaRot = new THREE.Quaternion()
-        .copy(parentWorldQuat)
-        .multiply(deltaRot)
-        .multiply(parentWorldQuat.clone().invert());
-      const euler = new THREE.Euler().setFromQuaternion(worldDeltaRot, "YXZ");
-      const yawDeltaRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), euler.y);
-      character.root.quaternion.multiply(yawDeltaRot);
+      if (applyRootRotation) {
+        character.root.updateMatrixWorld(true);
+        const parentWorldQuat = new THREE.Quaternion().setFromRotationMatrix(character.scene.matrixWorld);
+        const worldDeltaRot = new THREE.Quaternion()
+          .copy(parentWorldQuat)
+          .multiply(deltaRot)
+          .multiply(parentWorldQuat.clone().invert());
+        const euler = new THREE.Euler().setFromQuaternion(worldDeltaRot, "YXZ");
+        const yawDeltaRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), euler.y);
+        character.root.quaternion.multiply(yawDeltaRot);
+      }
       
       // 锁定垂直方向位移，防止人物在平坦地面上因数值精度走着走着飘起或下沉
       deltaPos.y = 0;
       
-      // 通过父节点世界矩阵的 3×3 子矩阵（旋转+缩放）将局部位移增量变换到世界空间
-      // 这是修复「RootMotion 困在原地」的核心：gltf.scene 上的 normalizeModel 缩放
-      // 使得 Root 骨骼局部坐标值与世界坐标值存在比例差异，必须经矩阵变换补偿
-      const m3 = new THREE.Matrix3().setFromMatrix4(character.scene.matrixWorld);
-      const deltaPosWorld = deltaPos.clone().applyMatrix3(m3);
+      // RootMotion 位移仍使用动画步幅，但世界方向可由配置切到角色前向。
+      // 这样 visualYawOffset 只修正外观姿态，不会把物理移动方向带歪。
+      const deltaPosWorld = getRootMotionDeltaWorld(actionName, character, deltaPos);
       const nextPos = character.root.position.clone().add(deltaPosWorld);
       
       // 碰撞判定检测
@@ -824,17 +1295,53 @@ function update(time) {
       character.rootMotionState.prevPosition.copy(currPos);
       character.rootMotionState.prevQuaternion.copy(currRot);
       
-      // 网格固定回归静息姿态，杜绝漂移（恢复到模型加载时的原始 Rest Pose，而非数学零值）
-      skeletonRoot.position.copy(character.rootRestPosition);
-      skeletonRoot.quaternion.copy(character.rootRestQuaternion);
+      // RootMotion 只抽取线性前进量；骨架 Root 以切入动作前的姿态为锚点，避免 walk/idle 的 Root 首帧偏移造成网格瞬移。
+      const rootPose = getDetrendedRootPose(clip, currTime, config);
+      const rootPoseStart = getDetrendedRootPose(clip, 0, config);
+      const rootPosePosition = character.rootMotionState.poseAnchor
+        .clone()
+        .add(rootPose)
+        .sub(rootPoseStart);
+      rootPosePosition.y = rootPose.y;
+      skeletonRoot.position.copy(rootPosePosition);
+      const rootPoseAnchorQuaternion = getRootPoseRotationAnchorQuaternion(
+        clip,
+        config,
+        character.rootMotionState.poseAnchorQuaternion,
+      );
+      skeletonRoot.quaternion.copy(
+        getRootPoseQuaternion(clip, currTime, config, rootPoseAnchorQuaternion),
+      );
     } else if (skeletonRoot) {
       // In-Place 原地模式：保留 Root 骨骼的去趋势后摆动数据，不在运行时覆盖
       // Root 摆动驱动角色重心左右偏移与上下起伏，是脚步贴地的核心依据
       // 叠加晃动的消减已在 filterAnimationTracks 中通过 rootSwayScale 轨道预处理完成
+      if (character.rootMotionBlendOut > 0) {
+        const targetPose = clip
+          ? getDetrendedRootPose(clip, activeAction.time, config)
+          : character.rootRestPosition;
+        const targetQuaternion = getInPlaceRootPoseQuaternion(
+          clip,
+          activeAction.time,
+          config,
+          character.rootRestQuaternion,
+        );
+        const blendProgress = 1 - (character.rootMotionBlendOut / ROOT_MOTION_BLEND_OUT_GRACE);
+        skeletonRoot.position
+          .copy(character.rootMotionState.poseAnchor)
+          .lerp(targetPose, smoothstep(THREE.MathUtils.clamp(blendProgress, 0, 1)));
+        skeletonRoot.quaternion
+          .copy(character.rootMotionState.poseAnchorQuaternion)
+          .slerp(targetQuaternion, smoothstep(THREE.MathUtils.clamp(blendProgress, 0, 1)));
+      } else if (config.motionMode === "InPlace" && config.bakeIntoPoseRotation !== false) {
+        skeletonRoot.quaternion.copy(character.rootRestQuaternion);
+      }
     }
 
     // 3. 更新过渡混合
     updateAction(character, character.desiredAction, delta);
+    updateVisualYawOffset(character, delta);
+    updateConfiguredFootLock(character, delta);
   });
 
   if (state.mode === "transition") {
@@ -858,6 +1365,7 @@ function update(time) {
   // applyFootLock 仅保留用于未来可能的 IK 脚底贴地修正。
 
   updateRootMarker();
+  updateFacingMarker();
   updateCamera(delta);
   window.__DEMO_STATE = getDebugState();
   renderer.render(scene, camera);
@@ -874,10 +1382,39 @@ function updateRootMarker() {
   rootMarker.position.set(position.x, 0.01, position.z);
 }
 
-function applyFootLock(character) {
+function updateFacingMarker() {
+  facingMarker.visible = !!player && player.root.visible;
+  if (!facingMarker.visible) return;
+
+  player.root.getWorldPosition(facingMarkerWorldPosition);
+  facingMarker.position.set(facingMarkerWorldPosition.x, 0.035, facingMarkerWorldPosition.z);
+  facingMarker.rotation.set(0, player.root.rotation.y, 0);
+}
+
+function updateConfiguredFootLock(character, delta) {
+  const actionName = getActionName(character, character.currentAction);
+  const config = motionConfig[actionName] || {};
+  if (character.footLock.cooldown > 0 || character.rootMotionBlendOut > 0) {
+    character.footLock.cooldown = Math.max(0, character.footLock.cooldown - delta);
+    character.footLock.boneName = null;
+    character.footLock.anchors.clear();
+    return;
+  }
+  if (!config.footLock) {
+    character.footLock.boneName = null;
+    character.footLock.anchors.clear();
+    return;
+  }
+  applyFootLock(character, config);
+}
+
+function applyFootLock(character, config = {}) {
   if (!character.active || !character.root.visible) return;
 
   character.root.updateMatrixWorld(true);
+  const contactY = config.footLockContactY ?? FOOT_LOCK_CONTACT_Y;
+  const releaseY = config.footLockReleaseY ?? FOOT_LOCK_RELEASE_Y;
+  const strength = config.footLockStrength ?? 1;
   const contacts = FOOT_LOCK_BONES
     .map((boneName) => {
       const bone = character.scene.getObjectByName(boneName);
@@ -892,26 +1429,45 @@ function applyFootLock(character) {
 
   if (!contacts.length) return;
 
-  const locked = contacts.find((contact) => contact.boneName === character.footLock.boneName);
-  if (!locked || locked.position.y > FOOT_LOCK_RELEASE_Y) {
-    const next = contacts.find((contact) => contact.position.y <= FOOT_LOCK_CONTACT_Y);
-    if (!next) {
-      character.footLock.boneName = null;
-      return;
+  const contactByBone = new Map(contacts.map((contact) => [contact.boneName, contact]));
+  for (const [boneName] of character.footLock.anchors) {
+    const contact = contactByBone.get(boneName);
+    if (!contact || contact.position.y > releaseY) {
+      character.footLock.anchors.delete(boneName);
     }
-    character.footLock.boneName = next.boneName;
-    character.footLock.anchor.copy(next.position);
-    return;
   }
 
-  if (locked.position.y > FOOT_LOCK_CONTACT_Y) return;
+  contacts.forEach((contact) => {
+    if (contact.position.y <= contactY && !character.footLock.anchors.has(contact.boneName)) {
+      character.footLock.anchors.set(contact.boneName, contact.position.clone());
+    }
+  });
 
-  character.root.position.x += character.footLock.anchor.x - locked.position.x;
-  character.root.position.z += character.footLock.anchor.z - locked.position.z;
+  const correction = new THREE.Vector3();
+  let lockedCount = 0;
+  for (const [boneName, anchor] of character.footLock.anchors) {
+    const contact = contactByBone.get(boneName);
+    if (!contact || contact.position.y > releaseY) continue;
+    correction.x += anchor.x - contact.position.x;
+    correction.z += anchor.z - contact.position.z;
+    lockedCount += 1;
+  }
+  if (!lockedCount) return;
+
+  correction.multiplyScalar(strength / lockedCount);
+  if (correction.lengthSq() <= 0.0000001) return;
+
+  const nextPosition = character.root.position.clone().add(correction);
+  if (state.mode !== "game" || canMoveTo(nextPosition)) {
+    character.root.position.copy(nextPosition);
+  }
   character.root.updateMatrixWorld(true);
 }
 
 function getDebugState() {
+  const debugActionName = player
+    ? (getActionName(player, player.desiredAction) ?? getActionName(player, player.currentAction))
+    : null;
   return {
     objectCount: scene.children.length,
     cameraPosition: camera.position.toArray(),
@@ -920,6 +1476,38 @@ function getDebugState() {
     markerVisible: diagnosticMarker.visible && diagnosticMarker.parent !== null,
     rootMarkerPosition: rootMarker.position.toArray(),
     rootMarkerVisible: rootMarker.visible,
+    facingMarkerPosition: facingMarker.position.toArray(),
+    facingMarkerRotationY: facingMarker.rotation.y,
+    facingMarkerVisible: facingMarker.visible,
+    combatMode: state.combatMode,
+    combatAttackActive: state.combatAttack.active,
+    combatAttackDirection: state.combatAttack.activeDirection,
+    combatAttackAction: state.combatAttack.activeActionName,
+    combatAttackQueuedDirection: state.combatAttack.queuedDirection,
+    combatAttackKeys: { ...state.combatAttack.keys },
+    combatAttackRecoveryTimer: state.combatAttack.recoveryTimer,
+    currentAction: player ? getActionName(player, player.currentAction) : null,
+    desiredAction: debugActionName,
+    visualYawOffsetDegrees: player
+      ? THREE.MathUtils.radToDeg(player.visualYawOffset)
+      : 0,
+    targetVisualYawOffsetDegrees: debugActionName
+      ? (motionConfig[debugActionName]?.visualYawOffsetDegrees ?? 0)
+      : 0,
+    codeMoveDirection: player && debugActionName
+      ? getConfiguredCodeMoveDirection(debugActionName, player).toArray()
+      : null,
+    motionMode: debugActionName ? (motionConfig[debugActionName]?.motionMode ?? "InPlace") : null,
+    rootMotionMoveBasis: debugActionName ? (motionConfig[debugActionName]?.rootMotionMoveBasis ?? null) : null,
+    rootMotionForwardOnly: !!(debugActionName && motionConfig[debugActionName]?.rootMotionForwardOnly),
+    codeMoveSpeed: debugActionName ? getConfiguredCodeMoveSpeed(debugActionName) : PLAYER_SPEED,
+    footLockEnabled: !!(debugActionName && motionConfig[debugActionName]?.footLock),
+    footLockAnchors: player ? Array.from(player.footLock.anchors.keys()) : [],
+    footLockCooldown: player ? player.footLock.cooldown : 0,
+    rootMotionBlendOut: player ? player.rootMotionBlendOut : 0,
+    rootMotionPoseAnchor: player ? player.rootMotionState.poseAnchor.toArray() : null,
+    rootPoseRotation: !!(debugActionName && motionConfig[debugActionName]?.rootPoseRotation),
+    rootPoseRotationAnchor: debugActionName ? (motionConfig[debugActionName]?.rootPoseRotationAnchor ?? "entryPose") : null,
     rootFilters: { ...state.rootFilters },
     characterBounds: characters
       ? Object.fromEntries(Object.entries(characters).map(([key, character]) => {
@@ -933,55 +1521,89 @@ function getDebugState() {
 }
 
 function updatePlayer(delta) {
-  const actionName = getActionName(player, player.currentAction) || "idle";
-  const config = motionConfig[actionName] || { motionMode: "InPlace" };
-
-  // 转向判定：若动作是在 RootMotion 模式下自转动作，则由 Root Motion 动画轨道直接驱动偏航世界旋转，屏蔽代码偏航
-  const isTurningAction = actionName === "turnLeft" || actionName === "turnRight";
-  const useRootRotation = isTurningAction && config.motionMode === "RootMotion";
-  
-  if (!useRootRotation) {
-    const turn = (state.keys.left ? 1 : 0) - (state.keys.right ? 1 : 0);
-    player.root.rotation.y += turn * TURN_SPEED * delta;
-  }
-
-  const moving = state.keys.forward;
-  const turningLeft = state.keys.left && !state.keys.right;
-  const turningRight = state.keys.right && !state.keys.left;
-  if (moving) {
-    player.desiredAction = player.actions.walk;
-  } else if (turningLeft) {
-    player.desiredAction = player.actions.turnLeft;
-  } else if (turningRight) {
-    player.desiredAction = player.actions.turnRight;
-  } else {
-    player.desiredAction = player.actions.idle;
-  }
-
-  if (!moving) {
-    // 停止移动时将 walk 动作的 timeScale 恢复为 1.0
+  const attackActionName = updateCombatAttackState();
+  if (attackActionName) {
     if (player.actions.walk) player.actions.walk.timeScale = 1.0;
+    if (player.actions.combatWalk) player.actions.combatWalk.timeScale = 1.0;
     return;
   }
 
+  const controlScale = consumeCombatRecoveryControlScale(delta);
+  const moving = state.keys.forward;
+  const turningLeft = state.keys.left && !state.keys.right;
+  const turningRight = state.keys.right && !state.keys.left;
+  const locomotion = state.combatMode
+    ? {
+        idle: player.actions.combatIdle,
+        walk: player.actions.combatWalk,
+        turnLeft: player.actions.combatTurnLeft,
+        turnRight: player.actions.combatTurnRight,
+      }
+    : {
+        idle: player.actions.idle,
+        walk: player.actions.walk,
+        turnLeft: player.actions.turnLeft,
+        turnRight: player.actions.turnRight,
+      };
+  const nextAction = moving
+    ? locomotion.walk
+    : turningLeft
+      ? locomotion.turnLeft
+      : turningRight
+        ? locomotion.turnRight
+        : locomotion.idle;
+  const nextActionName = getActionName(player, nextAction) || "idle";
+  const config = motionConfig[nextActionName] || { motionMode: "InPlace" };
+  const moveSpeed = getConfiguredCodeMoveSpeed(nextActionName);
+  const isTurningAction = nextActionName === "turnLeft"
+    || nextActionName === "turnRight"
+    || nextActionName === "combatTurnLeft"
+    || nextActionName === "combatTurnRight";
+  const useRootRotation = isTurningAction && config.motionMode === "RootMotion";
+
+  if (!useRootRotation) {
+    const turn = (state.keys.left ? 1 : 0) - (state.keys.right ? 1 : 0);
+    player.root.rotation.y += turn * TURN_SPEED * controlScale * delta;
+  }
+
+  player.desiredAction = nextAction;
+
+  if (player.actions.walk && nextAction !== player.actions.walk) player.actions.walk.timeScale = 1.0;
+  if (player.actions.combatWalk && nextAction !== player.actions.combatWalk) player.actions.combatWalk.timeScale = 1.0;
+  if (isTurningAction) nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+
+  if (!moving) return;
+  const effectiveMoveSpeed = moveSpeed * controlScale;
+
   // 位移判定：若动作是 Root Motion 模式，则位移完全由 Root Motion 动画位移增量驱动世界坐标，屏蔽代码位移
-  if (config.motionMode === "RootMotion") return;
+  if (config.motionMode === "RootMotion") {
+    if (hasConfiguredCodeMoveSpeed(nextActionName)) {
+      const naturalSpeed = computeAnimNaturalSpeed(nextActionName, player);
+      if (naturalSpeed > 0.1) {
+        const targetScale = moveSpeed / naturalSpeed;
+        nextAction.timeScale = THREE.MathUtils.clamp(targetScale * controlScale, 0, 3.0);
+      } else {
+        nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+      }
+    }
+    return;
+  }
 
   // InPlace 模式：代码驱动世界坐标位移
   // 通过 timeScale 步速匹配，使动画播放速率与代码移动速度同步，消除脚底打滑
-  const naturalSpeed = computeAnimNaturalSpeed("walk", player);
+  const naturalSpeed = computeAnimNaturalSpeed(nextActionName, player);
   if (naturalSpeed > 0.1) {
-    const targetScale = PLAYER_SPEED / naturalSpeed;
-    player.actions.walk.timeScale = Math.min(Math.max(targetScale, 0.5), 3.0);
-    console.log(`[SpeedMatch] naturalSpeed: ${naturalSpeed.toFixed(4)}, clamped timeScale: ${player.actions.walk.timeScale.toFixed(4)}`);
+    const targetScale = effectiveMoveSpeed / naturalSpeed;
+    nextAction.timeScale = THREE.MathUtils.clamp(targetScale, 0, 3.0);
+    console.log(`[SpeedMatch] ${nextActionName} naturalSpeed: ${naturalSpeed.toFixed(4)}, clamped timeScale: ${nextAction.timeScale.toFixed(4)}`);
   } else {
     // 针对极低水平位移的动画（如原地醉酒摆动），不进行大幅度步速匹配，恢复 1.0 倍速，防止除以近零值产生时值狂闪
-    player.actions.walk.timeScale = 1.0;
-    console.log(`[SpeedMatch] Low naturalSpeed (${naturalSpeed.toFixed(4)}), default to timeScale 1.0`);
+    nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+    console.log(`[SpeedMatch] ${nextActionName} low naturalSpeed (${naturalSpeed.toFixed(4)}), default to timeScale 1.0`);
   }
 
-  const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.root.rotation.y);
-  const next = player.root.position.clone().addScaledVector(forward, PLAYER_SPEED * delta);
+  const forward = getConfiguredCodeMoveDirection(nextActionName, player);
+  const next = player.root.position.clone().addScaledVector(forward, effectiveMoveSpeed * delta);
   if (canMoveTo(next)) {
     player.root.position.copy(next);
   }
@@ -996,20 +1618,55 @@ function canMoveTo(position) {
   return !obstacles.some((obstacle) => obstacle.intersectsBox(bounds));
 }
 
+function getActionTransitionDuration(currentActionName, nextActionName) {
+  if (isCombatAttackAction(currentActionName) && !isCombatAttackAction(nextActionName)) {
+    return COMBAT_ATTACK_RECOVERY_DURATION;
+  }
+  return ACTION_FADE_DURATION;
+}
+
 function updateAction(character, nextAction) {
   if (!nextAction || character.currentAction === nextAction) return;
+  const currentActionName = getActionName(character, character.currentAction);
+  const nextActionName = getActionName(character, nextAction);
+  const transitionDuration = getActionTransitionDuration(currentActionName, nextActionName);
+  const currentMotionMode = getMotionMode(currentActionName);
+  const nextMotionMode = getMotionMode(nextActionName);
+  const skeletonRoot = character.scene.getObjectByName(ROOT_TRACK_NAME);
+  const poseAnchor = skeletonRoot ? skeletonRoot.position.clone() : character.rootRestPosition.clone();
+  const poseAnchorQuaternion = skeletonRoot
+    ? skeletonRoot.quaternion.clone()
+    : character.rootRestQuaternion.clone();
+
+  if (currentMotionMode === "RootMotion" && nextMotionMode !== "RootMotion") {
+    character.rootMotionBlendOut = Math.max(character.rootMotionBlendOut, ROOT_MOTION_BLEND_OUT_GRACE);
+  }
+
   nextAction.enabled = true;
-  nextAction.reset().fadeIn(0.22).play();
-  character.currentAction.fadeOut(0.22);
+  nextAction.reset().fadeIn(transitionDuration).play();
+  character.currentAction.fadeOut(transitionDuration);
   character.currentAction = nextAction;
 
   // 在动作发生切换时，立刻重置根骨骼跟踪状态，确保提取 Root Motion 增量时不产生错误的跨边界巨大跳跃（杜绝人物闪现狂闪）
-  const skeletonRoot = character.scene.getObjectByName(ROOT_TRACK_NAME);
   if (skeletonRoot) {
     character.rootMotionState.prevTime = nextAction.time;
-    character.rootMotionState.prevPosition.copy(skeletonRoot.position);
-    character.rootMotionState.prevQuaternion.copy(skeletonRoot.quaternion);
+    const nextClip = animations[nextActionName];
+    if (nextMotionMode === "RootMotion" && nextClip) {
+      const sample = sampleClipRootMotion(nextClip, nextAction.time);
+      character.rootMotionState.prevPosition.copy(sample.position);
+      character.rootMotionState.prevQuaternion.copy(sample.quaternion);
+      character.rootMotionState.poseAnchor.copy(poseAnchor);
+      character.rootMotionState.poseAnchorQuaternion.copy(poseAnchorQuaternion);
+    } else {
+      character.rootMotionState.prevPosition.copy(skeletonRoot.position);
+      character.rootMotionState.prevQuaternion.copy(skeletonRoot.quaternion);
+      character.rootMotionState.poseAnchor.copy(skeletonRoot.position);
+      character.rootMotionState.poseAnchorQuaternion.copy(skeletonRoot.quaternion);
+    }
   }
+  character.footLock.boneName = null;
+  character.footLock.anchors.clear();
+  character.footLock.cooldown = Math.max(character.footLock.cooldown, ROOT_MOTION_BLEND_OUT_GRACE);
 }
 
 function updateCamera(delta) {
