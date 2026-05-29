@@ -1,0 +1,7 @@
+interface:
+  display_name: "Wuxia Web3D Animation"
+  short_description: "Animation guide for Wuxia Web3D"
+  default_prompt: 'Use $wuxia-web3d-animation to work on D:\Wuxia_Web animation, Root Motion, or FBX-to-GLB assets.'
+
+policy:
+  allow_implicit_invocation: true
