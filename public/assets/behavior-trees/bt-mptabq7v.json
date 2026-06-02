@@ -1,0 +1,18 @@
+{
+  "id": "bt-mptabq7v",
+  "name": "AI_0",
+  "version": 1,
+  "created": "2026-05-31T04:33:50.971Z",
+  "modified": "2026-05-31T04:33:50.978Z",
+  "normalState": {
+    "nodes": [],
+    "transitions": []
+  },
+  "combatState": {
+    "nodes": [],
+    "transitions": []
+  },
+  "brain": {
+    "rules": []
+  }
+}

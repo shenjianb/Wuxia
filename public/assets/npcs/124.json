@@ -1,0 +1,21 @@
+{
+  "id": "124",
+  "version": 1,
+  "created": "2026-05-29T16:36:27.560Z",
+  "modified": "2026-05-29T16:36:27.578Z",
+  "npcType": "hostile",
+  "modelType": "BaseMale",
+  "faction": 0,
+  "attributes": {
+    "name": "T",
+    "willpower": 10,
+    "health": 100,
+    "stamina": 100,
+    "strength": 10,
+    "agility": 10,
+    "reaction": 10
+  },
+  "vision": { "distance": 15, "angle": 120 },
+  "moveSpeed": { "normal": 2.0, "combat": 1.2 },
+  "behaviorTreeId": "bt-default-01"
+}

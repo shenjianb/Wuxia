@@ -1,0 +1,18 @@
+{
+  "id": "bt-mptb5t9n",
+  "name": "90",
+  "version": 1,
+  "created": "2026-05-31T04:57:14.603Z",
+  "modified": "2026-05-31T04:57:14.610Z",
+  "normalState": {
+    "nodes": [],
+    "transitions": []
+  },
+  "combatState": {
+    "nodes": [],
+    "transitions": []
+  },
+  "brain": {
+    "rules": []
+  }
+}

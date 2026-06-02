@@ -7,6 +7,8 @@ const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 const animationAssetsPath = path.resolve(projectRoot, "public/assets/animations");
 const motionConfigPath = path.resolve(animationAssetsPath, "motion_config.json");
 const scenesPath = path.resolve(projectRoot, "public/assets/scenes");
+const npcsPath = path.resolve(projectRoot, "public/assets/npcs");
+const behaviorTreesPath = path.resolve(projectRoot, "public/assets/behavior-trees");
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -169,15 +171,205 @@ function scenesApi() {
   };
 }
 
+function behaviorTreesApi() {
+  return {
+    name: "behavior-trees-api",
+    configureServer(server) {
+      server.middlewares.use("/api/behavior-trees", async (req, res) => {
+        try {
+          const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+          const pathParts = url.pathname.replace("/api/behavior-trees", "").replace(/^\/+/, "");
+          const treeId = decodeURIComponent(pathParts);
+
+          if (!treeId && req.method === "GET") {
+            await fs.mkdir(behaviorTreesPath, { recursive: true });
+            const entries = await fs.readdir(behaviorTreesPath, { withFileTypes: true });
+            const trees = [];
+            for (const entry of entries) {
+              if (entry.isFile() && entry.name.endsWith(".json")) {
+                try {
+                  const content = await fs.readFile(path.join(behaviorTreesPath, entry.name), "utf8");
+                  const data = JSON.parse(content);
+                  trees.push({
+                    id: data.id || entry.name.replace(".json", ""),
+                    name: data.name || data.id || entry.name.replace(".json", ""),
+                    created: data.created || "",
+                    modified: data.modified || "",
+                  });
+                } catch {
+                  const baseName = entry.name.replace(".json", "");
+                  trees.push({ id: baseName, name: baseName, created: "", modified: "" });
+                }
+              }
+            }
+            trees.sort((a, b) => (a.created || "").localeCompare(b.created || ""));
+            sendJson(res, 200, { trees });
+            return;
+          }
+
+          if (!treeId) {
+            sendJson(res, 400, { error: "Tree id is required." });
+            return;
+          }
+
+          const safeId = treeId.replace(/[<>:"/\\|?*]/g, "_");
+          const filePath = path.join(behaviorTreesPath, `${safeId}.json`);
+
+          if (req.method === "GET") {
+            try {
+              const content = await fs.readFile(filePath, "utf8");
+              sendJson(res, 200, JSON.parse(content));
+            } catch {
+              res.statusCode = 404;
+              sendJson(res, 404, { error: `Behavior tree "${treeId}" not found.` });
+            }
+            return;
+          }
+
+          if (req.method === "PUT" || req.method === "POST") {
+            const body = await readRequestBody(req);
+            const payload = JSON.parse(body || "{}");
+            if (!payload || typeof payload !== "object") {
+              sendJson(res, 400, { error: "Behavior tree data must be a JSON object." });
+              return;
+            }
+            payload.id = payload.id || treeId;
+            payload.modified = new Date().toISOString();
+            payload.created = payload.created || payload.modified;
+            if (!payload.name) payload.name = payload.id;
+            await fs.mkdir(behaviorTreesPath, { recursive: true });
+            await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+
+          if (req.method === "DELETE") {
+            try {
+              await fs.unlink(filePath);
+              sendJson(res, 200, { ok: true });
+            } catch {
+              res.statusCode = 404;
+              sendJson(res, 404, { error: `Behavior tree "${treeId}" not found.` });
+            }
+            return;
+          }
+
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, PUT, DELETE");
+          res.end();
+        } catch (error) {
+          sendJson(res, 500, { error: error.message });
+        }
+      });
+    },
+  };
+}
+
+function npcApi() {
+  return {
+    name: "npc-api",
+    configureServer(server) {
+      server.middlewares.use("/api/npcs", async (req, res) => {
+        try {
+          const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+          const pathParts = url.pathname.replace("/api/npcs", "").replace(/^\/+/, "");
+          const npcId = decodeURIComponent(pathParts);
+
+          if (!npcId && req.method === "GET") {
+            await fs.mkdir(npcsPath, { recursive: true });
+            const entries = await fs.readdir(npcsPath, { withFileTypes: true });
+            const npcs = [];
+            for (const entry of entries) {
+              if (entry.isFile() && entry.name.endsWith(".json")) {
+                try {
+                  const content = await fs.readFile(path.join(npcsPath, entry.name), "utf8");
+                  const data = JSON.parse(content);
+                  npcs.push({
+                    id: data.id || entry.name.replace(".json", ""),
+                    name: data.attributes?.name || data.id || entry.name.replace(".json", ""),
+                    faction: data.faction !== undefined ? data.faction : 0,
+                    modelType: data.modelType || "BaseMale",
+                    created: data.created || "",
+                    modified: data.modified || "",
+                  });
+                } catch {
+                  npcs.push({ id: entry.name.replace(".json", ""), name: entry.name.replace(".json", ""), faction: 0, modelType: "BaseMale", created: "", modified: "" });
+                }
+              }
+            }
+            sendJson(res, 200, { npcs });
+            return;
+          }
+
+          if (!npcId) {
+            res.statusCode = 400;
+            sendJson(res, 400, { error: "NPC id is required." });
+            return;
+          }
+
+          const safeId = npcId.replace(/[<>:"/\\|?*]/g, "_");
+          const filePath = path.join(npcsPath, `${safeId}.json`);
+
+          if (req.method === "GET") {
+            try {
+              const content = await fs.readFile(filePath, "utf8");
+              sendJson(res, 200, JSON.parse(content));
+            } catch {
+              res.statusCode = 404;
+              sendJson(res, 404, { error: `NPC "${npcId}" not found.` });
+            }
+            return;
+          }
+
+          if (req.method === "PUT" || req.method === "POST") {
+            const body = await readRequestBody(req);
+            const payload = JSON.parse(body || "{}");
+            if (!payload || typeof payload !== "object") {
+              sendJson(res, 400, { error: "NPC data must be a JSON object." });
+              return;
+            }
+            payload.id = payload.id || npcId;
+            payload.modified = new Date().toISOString();
+            payload.created = payload.created || payload.modified;
+            await fs.mkdir(npcsPath, { recursive: true });
+            await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+
+          if (req.method === "DELETE") {
+            try {
+              await fs.unlink(filePath);
+              sendJson(res, 200, { ok: true });
+            } catch {
+              res.statusCode = 404;
+              sendJson(res, 404, { error: `NPC "${npcId}" not found.` });
+            }
+            return;
+          }
+
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, PUT, DELETE");
+          res.end();
+        } catch (error) {
+          sendJson(res, 500, { error: error.message });
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: "./",
-  plugins: [motionConfigApi(), scenesApi()],
+  plugins: [motionConfigApi(), scenesApi(), npcApi(), behaviorTreesApi()],
   build: {
     rollupOptions: {
       input: {
         main: path.resolve(projectRoot, "index.html"),
         motionEditor: path.resolve(projectRoot, "motion-editor.html"),
         sceneEditor: path.resolve(projectRoot, "scene-editor.html"),
+        npcEditor: path.resolve(projectRoot, "npc-editor.html"),
+        behaviorEditor: path.resolve(projectRoot, "behavior-editor.html"),
       },
     },
   },
