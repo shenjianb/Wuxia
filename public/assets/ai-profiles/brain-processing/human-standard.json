@@ -1,0 +1,81 @@
+{
+  "id": "human-standard",
+  "type": "brain-processing",
+  "name": "人类型（标准体）",
+  "description": "标准安全/危险评分，接近链路图默认权重。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "scoringRules": [
+    {
+      "id": "human-hostile-faction",
+      "name": "阵营不一致",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "neSelf", "value": "" }],
+      "scoreTarget": "dangerScore",
+      "score": 5
+    },
+    {
+      "id": "human-hostile-low-health",
+      "name": "敌方生命低",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "health", "operator": "lte", "value": 30 }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 2
+    },
+    {
+      "id": "human-hostile-strong",
+      "name": "敌方强壮",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "strength", "operator": "gte", "value": 60 }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 3
+    },
+    {
+      "id": "human-hostile-looking",
+      "name": "敌方注视我",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "attentionToMe", "operator": "truthy", "value": true }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 10
+    },
+    {
+      "id": "human-friendly-faction",
+      "name": "阵营一致",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "eqSelf", "value": "" }],
+      "scoreTarget": "safeScore",
+      "score": 5
+    },
+    {
+      "id": "human-friendly-strong",
+      "name": "友方强壮",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "eqSelf", "value": "" },
+        { "attribute": "strength", "operator": "gte", "value": 60 }
+      ],
+      "scoreTarget": "safeScore",
+      "score": 10
+    },
+    {
+      "id": "human-friendly-looking",
+      "name": "友方注视我",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "eqSelf", "value": "" },
+        { "attribute": "attentionToMe", "operator": "truthy", "value": true }
+      ],
+      "scoreTarget": "safeScore",
+      "score": 10
+    }
+  ]
+}

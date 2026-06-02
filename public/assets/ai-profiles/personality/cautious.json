@@ -1,0 +1,53 @@
+{
+  "id": "cautious",
+  "type": "personality",
+  "name": "谨慎型",
+  "description": "安全占优时警惕，危险明显时优先逃跑。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "fallbackMode": "default",
+  "decisionCooldownMs": 1200,
+  "decisionRules": [
+    {
+      "id": "cautious-flee-low-health",
+      "name": "低生命逃跑",
+      "enabled": true,
+      "priority": 10,
+      "conditions": [
+        { "metric": "selfHealth", "operator": "lte", "value": 25 },
+        { "metric": "dangerScore", "operator": "gt", "value": 0 }
+      ],
+      "outputMode": "flee"
+    },
+    {
+      "id": "cautious-flee-danger",
+      "name": "危险占比过高",
+      "enabled": true,
+      "priority": 20,
+      "conditions": [{ "metric": "dangerRatio", "operator": "gte", "value": 0.65 }],
+      "outputMode": "flee"
+    },
+    {
+      "id": "cautious-alert-safe",
+      "name": "安全占优但有风险",
+      "enabled": true,
+      "priority": 30,
+      "conditions": [
+        { "metric": "safeRatio", "operator": "gte", "value": 0.6 },
+        { "metric": "dangerScore", "operator": "gt", "value": 0 }
+      ],
+      "outputMode": "alert"
+    },
+    {
+      "id": "cautious-attack",
+      "name": "确认攻击",
+      "enabled": true,
+      "priority": 40,
+      "conditions": [
+        { "metric": "dangerScore", "operator": "gte", "value": 15 },
+        { "metric": "dangerRatio", "operator": "gte", "value": 0.45 }
+      ],
+      "outputMode": "attack"
+    }
+  ]
+}

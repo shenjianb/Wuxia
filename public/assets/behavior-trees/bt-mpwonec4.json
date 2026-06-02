@@ -1,0 +1,610 @@
+{
+  "id": "bt-mpwonec4",
+  "name": "np1",
+  "version": 2,
+  "created": "2026-06-02T13:38:08.596Z",
+  "modified": "2026-06-02T13:38:08.603Z",
+  "modeDefinitions": [
+    {
+      "key": "default",
+      "label": "默认",
+      "description": "无明确威胁时的日常行为",
+      "builtin": true
+    },
+    {
+      "key": "alert",
+      "label": "警惕",
+      "description": "发现风险但尚未进入战斗",
+      "builtin": true
+    },
+    {
+      "key": "attack",
+      "label": "攻击",
+      "description": "锁定目标并执行攻击链",
+      "builtin": true
+    },
+    {
+      "key": "flee",
+      "label": "逃跑",
+      "description": "远离最高危险目标",
+      "builtin": true
+    }
+  ],
+  "behaviorModes": {
+    "default": {
+      "nodes": [
+        {
+          "id": "nd-mpwonec4-1",
+          "type": "walk",
+          "label": "随机走",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "bindings": {
+              "destinationPos": "randomPosition"
+            }
+          },
+          "x": 330,
+          "y": 210
+        }
+      ],
+      "transitions": [
+        {
+          "id": "tr-mpwonec4-8",
+          "from": "entry",
+          "to": "nd-mpwonec4-1",
+          "condition": {
+            "type": "always"
+          }
+        }
+      ]
+    },
+    "alert": {
+      "nodes": [
+        {
+          "id": "nd-mpwonec4-2",
+          "type": "lookAt",
+          "label": "注视危险目标",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "bindings": {
+              "targetPos": "highestDanger"
+            }
+          },
+          "x": 290,
+          "y": 160
+        },
+        {
+          "id": "nd-mpwonec4-3",
+          "type": "walk",
+          "label": "警惕游走",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "bindings": {
+              "destinationPos": "randomPosition"
+            }
+          },
+          "x": 520,
+          "y": 160
+        }
+      ],
+      "transitions": [
+        {
+          "id": "tr-mpwonec4-9",
+          "from": "entry",
+          "to": "nd-mpwonec4-2",
+          "condition": {
+            "type": "always"
+          }
+        },
+        {
+          "id": "tr-mpwonec4-10",
+          "from": "nd-mpwonec4-2",
+          "to": "nd-mpwonec4-3",
+          "condition": {
+            "type": "always"
+          }
+        }
+      ]
+    },
+    "attack": {
+      "nodes": [
+        {
+          "id": "nd-mpwonec4-4",
+          "type": "lookAt",
+          "label": "注视",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "bindings": {
+              "targetPos": "highestDanger"
+            }
+          },
+          "x": 260,
+          "y": 150
+        },
+        {
+          "id": "nd-mpwonec4-5",
+          "type": "lockTarget",
+          "label": "锁定",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "bindings": {
+              "targetPos": "lookTarget"
+            }
+          },
+          "x": 470,
+          "y": 150
+        },
+        {
+          "id": "nd-mpwonec4-6",
+          "type": "attack",
+          "label": "攻击",
+          "cooldown": 1500,
+          "cooldownModifiable": true,
+          "params": {
+            "bindings": {
+              "targetPos": "lockedTarget"
+            }
+          },
+          "x": 680,
+          "y": 150
+        }
+      ],
+      "transitions": [
+        {
+          "id": "tr-mpwonec4-11",
+          "from": "entry",
+          "to": "nd-mpwonec4-4",
+          "condition": {
+            "type": "always"
+          }
+        },
+        {
+          "id": "tr-mpwonec4-12",
+          "from": "nd-mpwonec4-4",
+          "to": "nd-mpwonec4-5",
+          "condition": {
+            "type": "always"
+          }
+        },
+        {
+          "id": "tr-mpwonec4-13",
+          "from": "nd-mpwonec4-5",
+          "to": "nd-mpwonec4-6",
+          "condition": {
+            "type": "always"
+          }
+        }
+      ]
+    },
+    "flee": {
+      "nodes": [
+        {
+          "id": "nd-mpwonec4-7",
+          "type": "run",
+          "label": "跑动逃离",
+          "cooldown": 800,
+          "cooldownModifiable": true,
+          "params": {
+            "bindings": {
+              "destinationPos": "fleeFromHighestDanger"
+            }
+          },
+          "x": 330,
+          "y": 210
+        }
+      ],
+      "transitions": [
+        {
+          "id": "tr-mpwonec4-14",
+          "from": "entry",
+          "to": "nd-mpwonec4-7",
+          "condition": {
+            "type": "always"
+          }
+        }
+      ]
+    }
+  },
+  "brain": {
+    "tickIntervalMs": 300,
+    "decisionCooldownMs": 1000,
+    "fallbackMode": "default",
+    "profileRefs": {
+      "brainProcessing": "",
+      "personality": ""
+    },
+    "scoringRules": [
+      {
+        "id": "score-hostile-faction",
+        "name": "阵营不一致",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "neSelf",
+            "value": ""
+          }
+        ],
+        "scoreTarget": "dangerScore",
+        "score": 5
+      },
+      {
+        "id": "score-hostile-low-health",
+        "name": "敌方生命低",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "neSelf",
+            "value": ""
+          },
+          {
+            "attribute": "health",
+            "operator": "lte",
+            "value": 30
+          }
+        ],
+        "scoreTarget": "dangerScore",
+        "score": 2
+      },
+      {
+        "id": "score-hostile-strong",
+        "name": "敌方强壮",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "neSelf",
+            "value": ""
+          },
+          {
+            "attribute": "strength",
+            "operator": "gte",
+            "value": 60
+          }
+        ],
+        "scoreTarget": "dangerScore",
+        "score": 3
+      },
+      {
+        "id": "score-hostile-looking",
+        "name": "敌方注视我",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "neSelf",
+            "value": ""
+          },
+          {
+            "attribute": "attentionToMe",
+            "operator": "truthy",
+            "value": true
+          }
+        ],
+        "scoreTarget": "dangerScore",
+        "score": 10
+      },
+      {
+        "id": "score-friendly-faction",
+        "name": "阵营一致",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "eqSelf",
+            "value": ""
+          }
+        ],
+        "scoreTarget": "safeScore",
+        "score": 5
+      },
+      {
+        "id": "score-friendly-strong",
+        "name": "友方强壮",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "eqSelf",
+            "value": ""
+          },
+          {
+            "attribute": "strength",
+            "operator": "gte",
+            "value": 60
+          }
+        ],
+        "scoreTarget": "safeScore",
+        "score": 10
+      },
+      {
+        "id": "score-friendly-looking",
+        "name": "友方注视我",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "eqSelf",
+            "value": ""
+          },
+          {
+            "attribute": "attentionToMe",
+            "operator": "truthy",
+            "value": true
+          }
+        ],
+        "scoreTarget": "safeScore",
+        "score": 10
+      }
+    ],
+    "decisionRules": [
+      {
+        "id": "decision-flee-low-health",
+        "name": "低生命逃跑",
+        "enabled": true,
+        "priority": 10,
+        "conditions": [
+          {
+            "metric": "selfHealth",
+            "operator": "lte",
+            "value": 20
+          },
+          {
+            "metric": "dangerScore",
+            "operator": "gt",
+            "value": 0
+          }
+        ],
+        "outputMode": "flee"
+      },
+      {
+        "id": "decision-flee-danger-ratio",
+        "name": "危险占比过高",
+        "enabled": true,
+        "priority": 20,
+        "conditions": [
+          {
+            "metric": "dangerRatio",
+            "operator": "gte",
+            "value": 0.7
+          }
+        ],
+        "outputMode": "flee"
+      },
+      {
+        "id": "decision-attack-danger",
+        "name": "进入攻击",
+        "enabled": true,
+        "priority": 30,
+        "conditions": [
+          {
+            "metric": "dangerScore",
+            "operator": "gte",
+            "value": 10
+          },
+          {
+            "metric": "dangerRatio",
+            "operator": "gte",
+            "value": 0.35
+          }
+        ],
+        "outputMode": "attack"
+      },
+      {
+        "id": "decision-alert-cautious",
+        "name": "谨慎警惕",
+        "enabled": true,
+        "priority": 40,
+        "conditions": [
+          {
+            "metric": "safeRatio",
+            "operator": "gte",
+            "value": 0.6
+          },
+          {
+            "metric": "dangerScore",
+            "operator": "gt",
+            "value": 0
+          }
+        ],
+        "outputMode": "alert"
+      },
+      {
+        "id": "decision-default-empty",
+        "name": "无可见目标",
+        "enabled": true,
+        "priority": 90,
+        "conditions": [
+          {
+            "metric": "visibleTargetCount",
+            "operator": "lte",
+            "value": 0
+          }
+        ],
+        "outputMode": "default"
+      }
+    ],
+    "blackboardSources": {
+      "highestDanger": {
+        "selector": "highestDanger"
+      },
+      "weakestDanger": {
+        "selector": "weakestDanger"
+      },
+      "lookTarget": {
+        "selector": "lookTarget"
+      },
+      "lockedTarget": {
+        "selector": "lockedTarget"
+      },
+      "randomPosition": {
+        "selector": "randomPosition",
+        "radius": 6
+      },
+      "fleeFromHighestDanger": {
+        "selector": "fleeFromHighestDanger",
+        "distance": 8
+      }
+    },
+    "previewScenario": {
+      "self": {
+        "id": "self",
+        "name": "自己",
+        "faction": 1,
+        "health": 100,
+        "stamina": 100,
+        "strength": 45,
+        "agility": 10,
+        "reaction": 10,
+        "position": [
+          0,
+          0,
+          0
+        ]
+      },
+      "visibleTargets": [
+        {
+          "id": "target-0",
+          "name": "目标0",
+          "faction": 0,
+          "health": 20,
+          "stamina": 100,
+          "strength": 70,
+          "agility": 10,
+          "reaction": 10,
+          "distance": 2,
+          "attentionToMe": true,
+          "position": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "target-1",
+          "name": "目标1",
+          "faction": 1,
+          "health": 80,
+          "stamina": 100,
+          "strength": 65,
+          "agility": 10,
+          "reaction": 10,
+          "distance": 3,
+          "attentionToMe": true,
+          "position": [
+            -2,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    "rules": []
+  },
+  "normalState": {
+    "nodes": [
+      {
+        "id": "nd-mpwonec4-1",
+        "type": "walk",
+        "label": "随机走",
+        "cooldown": 0,
+        "cooldownModifiable": false,
+        "params": {
+          "bindings": {
+            "destinationPos": "randomPosition"
+          }
+        },
+        "x": 330,
+        "y": 210
+      }
+    ],
+    "transitions": [
+      {
+        "id": "tr-mpwonec4-8",
+        "from": "entry",
+        "to": "nd-mpwonec4-1",
+        "condition": {
+          "type": "always"
+        }
+      }
+    ]
+  },
+  "combatState": {
+    "nodes": [
+      {
+        "id": "nd-mpwonec4-4",
+        "type": "lookAt",
+        "label": "注视",
+        "cooldown": 0,
+        "cooldownModifiable": false,
+        "params": {
+          "bindings": {
+            "targetPos": "highestDanger"
+          }
+        },
+        "x": 260,
+        "y": 150
+      },
+      {
+        "id": "nd-mpwonec4-5",
+        "type": "lockTarget",
+        "label": "锁定",
+        "cooldown": 0,
+        "cooldownModifiable": false,
+        "params": {
+          "bindings": {
+            "targetPos": "lookTarget"
+          }
+        },
+        "x": 470,
+        "y": 150
+      },
+      {
+        "id": "nd-mpwonec4-6",
+        "type": "attack",
+        "label": "攻击",
+        "cooldown": 1500,
+        "cooldownModifiable": true,
+        "params": {
+          "bindings": {
+            "targetPos": "lockedTarget"
+          }
+        },
+        "x": 680,
+        "y": 150
+      }
+    ],
+    "transitions": [
+      {
+        "id": "tr-mpwonec4-11",
+        "from": "entry",
+        "to": "nd-mpwonec4-4",
+        "condition": {
+          "type": "always"
+        }
+      },
+      {
+        "id": "tr-mpwonec4-12",
+        "from": "nd-mpwonec4-4",
+        "to": "nd-mpwonec4-5",
+        "condition": {
+          "type": "always"
+        }
+      },
+      {
+        "id": "tr-mpwonec4-13",
+        "from": "nd-mpwonec4-5",
+        "to": "nd-mpwonec4-6",
+        "condition": {
+          "type": "always"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "antisocial",
+  "type": "personality",
+  "name": "反社会型",
+  "description": "更容易把可见目标转化为攻击行为。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "fallbackMode": "default",
+  "decisionCooldownMs": 600,
+  "decisionRules": [
+    {
+      "id": "antisocial-attack-any-danger",
+      "name": "发现危险即攻击",
+      "enabled": true,
+      "priority": 10,
+      "conditions": [{ "metric": "dangerScore", "operator": "gt", "value": 0 }],
+      "outputMode": "attack"
+    },
+    {
+      "id": "antisocial-attack-visible",
+      "name": "看见目标也会攻击",
+      "enabled": true,
+      "priority": 20,
+      "conditions": [{ "metric": "visibleTargetCount", "operator": "gt", "value": 0 }],
+      "outputMode": "attack"
+    }
+  ]
+}

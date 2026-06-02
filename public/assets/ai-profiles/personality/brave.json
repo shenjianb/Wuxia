@@ -1,0 +1,31 @@
+{
+  "id": "brave",
+  "type": "personality",
+  "name": "勇猛型",
+  "description": "优先攻击，只有极低生命且危险极高时才逃跑。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "fallbackMode": "default",
+  "decisionCooldownMs": 800,
+  "decisionRules": [
+    {
+      "id": "brave-attack",
+      "name": "危险目标优先攻击",
+      "enabled": true,
+      "priority": 10,
+      "conditions": [{ "metric": "dangerScore", "operator": "gte", "value": 5 }],
+      "outputMode": "attack"
+    },
+    {
+      "id": "brave-flee-critical",
+      "name": "濒死撤退",
+      "enabled": true,
+      "priority": 5,
+      "conditions": [
+        { "metric": "selfHealth", "operator": "lte", "value": 10 },
+        { "metric": "dangerRatio", "operator": "gte", "value": 0.9 }
+      ],
+      "outputMode": "flee"
+    }
+  ]
+}

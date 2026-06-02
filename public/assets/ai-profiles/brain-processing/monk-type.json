@@ -1,0 +1,48 @@
+{
+  "id": "monk-type",
+  "type": "brain-processing",
+  "name": "僧侣型",
+  "description": "对阵营差异不敏感，危险分普遍偏低。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "scoringRules": [
+    {
+      "id": "monk-hostile-faction",
+      "name": "异阵营轻微危险",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "neSelf", "value": "" }],
+      "scoreTarget": "dangerScore",
+      "score": 1
+    },
+    {
+      "id": "monk-hostile-strong",
+      "name": "异阵营强壮",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "strength", "operator": "gte", "value": 70 }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 2
+    },
+    {
+      "id": "monk-hostile-looking",
+      "name": "异阵营注视我",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "attentionToMe", "operator": "truthy", "value": true }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 2
+    },
+    {
+      "id": "monk-friendly-faction",
+      "name": "同阵营安全",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "eqSelf", "value": "" }],
+      "scoreTarget": "safeScore",
+      "score": 8
+    }
+  ]
+}

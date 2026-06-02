@@ -2,10 +2,9 @@
   "id": "123",
   "version": 1,
   "created": "2026-05-29T16:35:21.380Z",
-  "modified": "2026-05-29T16:35:30.517Z",
-  "npcType": "hostile",
-  "modelType": "BaseFemale",
+  "modified": "2026-06-02T14:11:02.237Z",
   "faction": 0,
+  "modelType": "BaseFemale",
   "attributes": {
     "name": "One",
     "willpower": 21,
@@ -15,7 +14,13 @@
     "agility": 10,
     "reaction": 10
   },
-  "vision": { "distance": 15, "angle": 120 },
-  "moveSpeed": { "normal": 2.0, "combat": 1.2 },
-  "behaviorTreeId": "bt-default-01"
+  "vision": {
+    "distance": 15,
+    "angle": 120
+  },
+  "moveSpeed": {
+    "normal": 2,
+    "combat": 1.2
+  },
+  "behaviorTreeId": "bt-mpwonec4"
 }

@@ -1,0 +1,48 @@
+{
+  "id": "animal-type",
+  "type": "brain-processing",
+  "name": "动物型",
+  "description": "对非本阵营目标高度敏感，危险分偏高。",
+  "created": "2026-06-02T00:00:00.000Z",
+  "modified": "2026-06-02T00:00:00.000Z",
+  "scoringRules": [
+    {
+      "id": "animal-hostile-faction",
+      "name": "异阵营即危险",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "neSelf", "value": "" }],
+      "scoreTarget": "dangerScore",
+      "score": 20
+    },
+    {
+      "id": "animal-hostile-strong",
+      "name": "异阵营强壮",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "strength", "operator": "gte", "value": 50 }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 10
+    },
+    {
+      "id": "animal-hostile-looking",
+      "name": "异阵营注视我",
+      "enabled": true,
+      "conditions": [
+        { "attribute": "faction", "operator": "neSelf", "value": "" },
+        { "attribute": "attentionToMe", "operator": "truthy", "value": true }
+      ],
+      "scoreTarget": "dangerScore",
+      "score": 20
+    },
+    {
+      "id": "animal-same-faction",
+      "name": "同阵营安全",
+      "enabled": true,
+      "conditions": [{ "attribute": "faction", "operator": "eqSelf", "value": "" }],
+      "scoreTarget": "safeScore",
+      "score": 2
+    }
+  ]
+}
