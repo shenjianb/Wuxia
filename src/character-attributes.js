@@ -71,6 +71,8 @@ export const BRAIN_DECISION_METRICS = [
   { key: "highestDangerScore", label: "最高危险分", valueType: "number" },
   { key: "strongestDangerStrength", label: "危险目标最高强壮度", valueType: "number" },
   { key: "selfHealth", label: "自身生命", valueType: "number" },
+  { key: "targetAngleDeltaDegrees", label: "当前朝向与目标方位角度差", valueType: "number" },
+  { key: "targetDistance", label: "当前与目标距离差", valueType: "number" },
 ];
 
 export const BEHAVIOR_MODE_TYPES = [
@@ -98,6 +100,7 @@ export const NODE_DATA_REQUIREMENTS = {
   move: [{ key: "destinationPos", label: "目的地 Pos", defaultSource: "randomPosition" }],
   run: [{ key: "destinationPos", label: "目的地 Pos", defaultSource: "fleeFromHighestDanger" }],
   attack: [{ key: "targetPos", label: "目标 Pos", defaultSource: "lockedTarget" }],
+  modeSwitch: [],
 };
 
 export const BRAIN_OUTPUT_TYPES = [
@@ -116,6 +119,7 @@ export const BEHAVIOR_NODE_TYPES = [
   { key: "move", label: "移动", icon: "" },
   { key: "run", label: "跑动", icon: "" },
   { key: "attack", label: "攻击", icon: "" },
+  { key: "modeSwitch", label: "模式切换", icon: "" },
   { key: "stateTransition", label: "状态切换", icon: "" },
 ];
 

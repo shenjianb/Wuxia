@@ -27,6 +27,8 @@ ANIMATIONS = [
     ("Anim_Combat_Idle_Turn_R_Hand", FBX_DIR / "Anim_Combat_Idle_Turn_R_Hand_In.fbx", "shortest", "none"),
     ("Anim_Combat_Att_F_Hand_0", FBX_DIR / "Anim_Combat_Att_F_Hand_0_In.fbx", "shortest", "none"),
     ("Anim_Combat_Att_F_Hand_1", FBX_DIR / "Anim_Combat_Att_F_Hand_1_In.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_F_Hand_1_Ro", FBX_DIR / "Anim_Combat_Att_F_Hand_1_Ro.fbx", "shortest", "none"),
+    ("Anim_Combat_Att_F_Hand_2", FBX_DIR / "Anim_Combat_Att_F_Hand_2_In.fbx", "shortest", "none"),
     ("Anim_Combat_Att_RB_Hand_0", FBX_DIR / "Anim_Combat_Att_RB_Hand_0_In.fbx", "shortest", "none"),
     ("Anim_Combat_Att_LB_Hand_0", FBX_DIR / "Anim_Combat_Att_LB_Hand_0_In.fbx", "shortest", "none"),
 ]

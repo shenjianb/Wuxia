@@ -9,11 +9,53 @@ import {
   TARGET_SELECTOR_TYPES,
   TRANSITION_CONDITION_TYPES,
 } from "./character-attributes.js";
+import {
+  COMBAT_MOVE_DIRECTIONS,
+  DEFAULT_COMBAT_MOVE_MANAGER,
+  getAllCombatMoves,
+  normalizeCombatMoveManager,
+} from "./combat-move-manager.js";
 import { evaluateNpcBrain } from "./npc-ai-runtime.js";
 import "./behavior-editor.css";
 
 const ENTRY_NODE_ID = "entry";
 const BUILTIN_MODE_KEYS = new Set(BEHAVIOR_MODE_TYPES.map((mode) => mode.key));
+const MODE_SWITCH_NODE_TYPE = "modeSwitch";
+const DEFAULT_LOCK_TURN_SPEED = 2.35;
+const DEFAULT_ATTACK_ARC_DEGREES = 20;
+const DEFAULT_ATTACK_DISTANCE = 1.45;
+const DEFAULT_MODE_SWITCH_CONFIGS = {
+  default: {
+    minDurationMs: 0,
+    stableDurationMs: 0,
+    lostTargetGraceMs: 0,
+    interruptibleBy: ["alert", "attack", "flee"],
+  },
+  alert: {
+    minDurationMs: 1200,
+    stableDurationMs: 700,
+    lostTargetGraceMs: 1200,
+    interruptibleBy: ["attack", "flee"],
+  },
+  attack: {
+    minDurationMs: 1600,
+    stableDurationMs: 900,
+    lostTargetGraceMs: 1500,
+    interruptibleBy: ["flee"],
+  },
+  flee: {
+    minDurationMs: 2500,
+    stableDurationMs: 1000,
+    lostTargetGraceMs: 1200,
+    interruptibleBy: [],
+  },
+  custom: {
+    minDurationMs: 1200,
+    stableDurationMs: 800,
+    lostTargetGraceMs: 1200,
+    interruptibleBy: ["attack", "flee"],
+  },
+};
 
 let uidCounter = 0;
 function uid(prefix) {
@@ -29,11 +71,58 @@ function createEmptyState() {
   return { nodes: [], transitions: [] };
 }
 
+function createEmptyStateWithModeSwitch(modeKey = "custom") {
+  const modeSwitch = makeNode(MODE_SWITCH_NODE_TYPE, "模式切换", 330, 210, { modeKey });
+  return {
+    nodes: [modeSwitch],
+    transitions: [{ id: uid("tr"), from: ENTRY_NODE_ID, to: modeSwitch.id, condition: { type: "always" } }],
+  };
+}
+
 function createModeDefinitions() {
   return BEHAVIOR_MODE_TYPES.map((mode) => ({ ...mode, builtin: true }));
 }
 
-function makeNode(type, label, x, y) {
+function getDefaultModeSwitchConfig(modeKey = "custom") {
+  const config = DEFAULT_MODE_SWITCH_CONFIGS[modeKey] || DEFAULT_MODE_SWITCH_CONFIGS.custom;
+  return cloneData(config);
+}
+
+function normalizeModeSwitchConfig(config = {}, modeKey = "custom") {
+  const defaults = getDefaultModeSwitchConfig(modeKey);
+  const interruptibleBy = Array.isArray(config.interruptibleBy)
+    ? config.interruptibleBy
+    : defaults.interruptibleBy;
+  return {
+    minDurationMs: asInt(config.minDurationMs ?? defaults.minDurationMs, defaults.minDurationMs),
+    stableDurationMs: asInt(config.stableDurationMs ?? defaults.stableDurationMs, defaults.stableDurationMs),
+    lostTargetGraceMs: asInt(config.lostTargetGraceMs ?? defaults.lostTargetGraceMs, defaults.lostTargetGraceMs),
+    interruptibleBy: [...new Set(interruptibleBy.filter(Boolean))],
+  };
+}
+
+function normalizeLockTargetConfig(config = {}) {
+  const turnSpeed = Number(config.turnSpeed);
+  return {
+    turnSpeed: Number.isFinite(turnSpeed) && turnSpeed > 0 ? turnSpeed : DEFAULT_LOCK_TURN_SPEED,
+  };
+}
+
+function normalizeAttackConfig(config = {}) {
+  const attackAngleDegrees = Number(config.attackAngleDegrees);
+  const attackDistance = Number(config.attackDistance);
+  return {
+    attackAngleDegrees: Number.isFinite(attackAngleDegrees) && attackAngleDegrees >= 0
+      ? attackAngleDegrees
+      : DEFAULT_ATTACK_ARC_DEGREES,
+    attackDistance: Number.isFinite(attackDistance) && attackDistance >= 0
+      ? attackDistance
+      : DEFAULT_ATTACK_DISTANCE,
+    combatMoveId: String(config.combatMoveId || ""),
+  };
+}
+
+function makeNode(type, label, x, y, options = {}) {
   const typeDef = BEHAVIOR_NODE_TYPES.find((item) => item.key === type);
   const node = {
     id: uid("nd"),
@@ -45,42 +134,63 @@ function makeNode(type, label, x, y) {
     x,
     y,
   };
+  if (type === MODE_SWITCH_NODE_TYPE) {
+    node.params.modeSwitch = normalizeModeSwitchConfig(node.params.modeSwitch, options.modeKey);
+  }
+  if (type === "lockTarget") {
+    node.params.lockTarget = normalizeLockTargetConfig(node.params.lockTarget);
+  }
+  if (type === "attack") {
+    node.params.attack = normalizeAttackConfig(node.params.attack);
+  }
   ensureNodeBindings(node);
   return node;
 }
 
 function createDefaultBehaviorModes() {
   const defaultWalk = makeNode("walk", "随机走", 330, 210);
+  const defaultSwitch = makeNode(MODE_SWITCH_NODE_TYPE, "模式切换", 560, 210, { modeKey: "default" });
   const alertLook = makeNode("lookAt", "注视危险目标", 290, 160);
   const alertWalk = makeNode("walk", "警惕游走", 520, 160);
+  const alertSwitch = makeNode(MODE_SWITCH_NODE_TYPE, "模式切换", 760, 160, { modeKey: "alert" });
   const attackLook = makeNode("lookAt", "注视", 260, 150);
   const attackLock = makeNode("lockTarget", "锁定", 470, 150);
   const attack = makeNode("attack", "攻击", 680, 150);
+  const attackSwitch = makeNode(MODE_SWITCH_NODE_TYPE, "模式切换", 900, 150, { modeKey: "attack" });
   const flee = makeNode("run", "跑动逃离", 330, 210);
+  const fleeSwitch = makeNode(MODE_SWITCH_NODE_TYPE, "模式切换", 560, 210, { modeKey: "flee" });
 
   return {
     default: {
-      nodes: [defaultWalk],
-      transitions: [{ id: uid("tr"), from: ENTRY_NODE_ID, to: defaultWalk.id, condition: { type: "always" } }],
+      nodes: [defaultWalk, defaultSwitch],
+      transitions: [
+        { id: uid("tr"), from: ENTRY_NODE_ID, to: defaultWalk.id, condition: { type: "always" } },
+        { id: uid("tr"), from: defaultWalk.id, to: defaultSwitch.id, condition: { type: "always" } },
+      ],
     },
     alert: {
-      nodes: [alertLook, alertWalk],
+      nodes: [alertLook, alertWalk, alertSwitch],
       transitions: [
         { id: uid("tr"), from: ENTRY_NODE_ID, to: alertLook.id, condition: { type: "always" } },
         { id: uid("tr"), from: alertLook.id, to: alertWalk.id, condition: { type: "always" } },
+        { id: uid("tr"), from: alertWalk.id, to: alertSwitch.id, condition: { type: "always" } },
       ],
     },
     attack: {
-      nodes: [attackLook, attackLock, attack],
+      nodes: [attackLook, attackLock, attack, attackSwitch],
       transitions: [
         { id: uid("tr"), from: ENTRY_NODE_ID, to: attackLook.id, condition: { type: "always" } },
         { id: uid("tr"), from: attackLook.id, to: attackLock.id, condition: { type: "always" } },
         { id: uid("tr"), from: attackLock.id, to: attack.id, condition: { type: "always" } },
+        { id: uid("tr"), from: attack.id, to: attackSwitch.id, condition: { type: "always" } },
       ],
     },
     flee: {
-      nodes: [flee],
-      transitions: [{ id: uid("tr"), from: ENTRY_NODE_ID, to: flee.id, condition: { type: "always" } }],
+      nodes: [flee, fleeSwitch],
+      transitions: [
+        { id: uid("tr"), from: ENTRY_NODE_ID, to: flee.id, condition: { type: "always" } },
+        { id: uid("tr"), from: flee.id, to: fleeSwitch.id, condition: { type: "always" } },
+      ],
     },
   };
 }
@@ -318,6 +428,8 @@ const editor = {
     brainProcessing: [],
     personality: [],
   },
+  combatMoveManager: normalizeCombatMoveManager(DEFAULT_COMBAT_MOVE_MANAGER),
+  combatMoves: getAllCombatMoves(DEFAULT_COMBAT_MOVE_MANAGER),
 };
 
 const refs = {};
@@ -334,7 +446,10 @@ async function boot() {
   const params = new URLSearchParams(window.location.search);
   const autoTreeId = params.get("treeId");
   try {
-    await loadAiProfileLists();
+    await Promise.all([
+      loadAiProfileLists(),
+      loadCombatMoveManagerForEditor(),
+    ]);
     await loadTreeList(autoTreeId);
     window.__BEHAVIOR_EDITOR_READY = true;
   } catch (error) {
@@ -533,6 +648,28 @@ async function loadAiProfileLists() {
   ]);
   editor.aiProfileLists.brainProcessing = brainProcessing;
   editor.aiProfileLists.personality = personality;
+}
+
+async function loadCombatMoveManagerForEditor() {
+  let manager = null;
+  try {
+    const resp = await fetch("/api/combat-move-manager", { cache: "no-store" });
+    if (resp.ok) manager = await resp.json();
+  } catch {
+    // Static builds use the public JSON fallback below.
+  }
+
+  if (!manager) {
+    try {
+      const resp = await fetch("./assets/combat/move_manager.json", { cache: "no-store" });
+      if (resp.ok) manager = await resp.json();
+    } catch {
+      // Fall back to the built-in move pool.
+    }
+  }
+
+  editor.combatMoveManager = normalizeCombatMoveManager(manager || DEFAULT_COMBAT_MOVE_MANAGER);
+  editor.combatMoves = getAllCombatMoves(editor.combatMoveManager);
 }
 
 async function fetchAiProfileList(type) {
@@ -745,6 +882,7 @@ function normalizeBehaviorTree(input) {
 
   for (const key of Object.keys(tree.behaviorModes)) {
     tree.behaviorModes[key] = normalizeState(tree.behaviorModes[key]);
+    ensureModeSwitchNode(tree.behaviorModes[key], key);
   }
 
   tree.brain = normalizeBrain(tree.brain);
@@ -759,6 +897,45 @@ function normalizeState(state) {
   };
 }
 
+function ensureModeSwitchNode(state, modeKey) {
+  if (!state) return;
+  let modeSwitch = state.nodes.find((node) => node.type === MODE_SWITCH_NODE_TYPE);
+  if (!modeSwitch) {
+    const sourceNode = getModeSwitchSourceNode(state);
+    modeSwitch = makeNode(
+      MODE_SWITCH_NODE_TYPE,
+      "模式切换",
+      sourceNode && sourceNode !== ENTRY_NODE_ID ? (sourceNode.x || 250) + 230 : 330,
+      sourceNode && sourceNode !== ENTRY_NODE_ID ? (sourceNode.y || 200) : 210,
+      { modeKey },
+    );
+    state.nodes.push(modeSwitch);
+  }
+  modeSwitch.params = modeSwitch.params && typeof modeSwitch.params === "object" ? modeSwitch.params : {};
+  modeSwitch.params.modeSwitch = normalizeModeSwitchConfig(modeSwitch.params.modeSwitch, modeKey);
+
+  if (state.transitions.some((transition) => transition.to === modeSwitch.id)) return;
+  const sourceNode = getModeSwitchSourceNode(state, modeSwitch.id);
+  const from = sourceNode && sourceNode !== modeSwitch ? sourceNode.id || ENTRY_NODE_ID : ENTRY_NODE_ID;
+  if (from === modeSwitch.id) return;
+  state.transitions.push({ id: uid("tr"), from, to: modeSwitch.id, condition: { type: "always" } });
+}
+
+function getModeSwitchSourceNode(state, switchNodeId = null) {
+  const nodes = state.nodes.filter((node) => node.id !== switchNodeId && node.type !== MODE_SWITCH_NODE_TYPE);
+  if (!nodes.length) return ENTRY_NODE_ID;
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const visited = new Set();
+  let current = state.transitions.find((transition) => transition.from === ENTRY_NODE_ID && transition.to !== switchNodeId)?.to;
+  let lastNode = null;
+  while (current && nodesById.has(current) && !visited.has(current)) {
+    visited.add(current);
+    lastNode = nodesById.get(current);
+    current = state.transitions.find((transition) => transition.from === current && transition.to !== switchNodeId)?.to;
+  }
+  return lastNode || nodes.slice().sort((a, b) => (a.x || 0) - (b.x || 0)).at(-1);
+}
+
 function normalizeNode(node) {
   const normalized = {
     id: node.id || uid("nd"),
@@ -771,6 +948,15 @@ function normalizeNode(node) {
     y: Number.isFinite(Number(node.y)) ? Number(node.y) : 200,
   };
   ensureNodeBindings(normalized);
+  if (normalized.type === MODE_SWITCH_NODE_TYPE) {
+    normalized.params.modeSwitch = normalizeModeSwitchConfig(normalized.params.modeSwitch, "custom");
+  }
+  if (normalized.type === "lockTarget") {
+    normalized.params.lockTarget = normalizeLockTargetConfig(normalized.params.lockTarget);
+  }
+  if (normalized.type === "attack") {
+    normalized.params.attack = normalizeAttackConfig(normalized.params.attack);
+  }
   return normalized;
 }
 
@@ -942,7 +1128,7 @@ function addBehaviorMode() {
   if (!label) return;
   const key = `custom-${Date.now().toString(36)}`;
   editor.behaviorTree.modeDefinitions.push({ key, label, description: "", builtin: false });
-  editor.behaviorTree.behaviorModes[key] = createEmptyState();
+  editor.behaviorTree.behaviorModes[key] = createEmptyStateWithModeSwitch(key);
   editor.activeTree = key;
   setDirty();
   renderModeSelect();
@@ -1078,6 +1264,9 @@ function createNodeElement(node) {
   const bindingLines = getNodeBindingSummary(node)
     .map((line) => `<div class="binding-info">${escapeHtml(line)}</div>`)
     .join("");
+  const modeSwitchText = node.type === MODE_SWITCH_NODE_TYPE
+    ? `<div class="binding-info">${escapeHtml(getModeSwitchSummary(node))}</div>`
+    : "";
 
   div.innerHTML = `
     <div class="node-header">${typeDef.icon ? `${escapeHtml(typeDef.icon)} ` : ""}${escapeHtml(node.label || typeDef.label)}</div>
@@ -1085,6 +1274,7 @@ function createNodeElement(node) {
       <div>${escapeHtml(typeDef.label)}</div>
       ${cooldownText}
       ${bindingLines}
+      ${modeSwitchText}
       <div class="node-ports">
         <div class="node-port port-in" data-port="in" data-node-id="${node.id}"></div>
         <div class="node-port port-out" data-port="out" data-node-id="${node.id}"></div>
@@ -1373,7 +1563,7 @@ function selectTransition(transitionId) {
 function addNode(nodeType) {
   const state = getCurrentState();
   if (!state) return;
-  const node = makeNode(nodeType, "", 250 + state.nodes.length * 50, 200 + state.nodes.length * 40);
+  const node = makeNode(nodeType, "", 250 + state.nodes.length * 50, 200 + state.nodes.length * 40, { modeKey: editor.activeTree });
   state.nodes.push(node);
   setDirty();
   selectNode(node.id);
@@ -1512,6 +1702,12 @@ function renderNodeProperties(scroll) {
   basicGroup.appendChild(labelRow);
   scroll.appendChild(basicGroup);
 
+  if (node.type === MODE_SWITCH_NODE_TYPE) {
+    renderModeSwitchNodeProperties(scroll, node);
+    renderNodeActionGroup(scroll, node);
+    return;
+  }
+
   const cooldownGroup = createFieldGroup("冷却时间");
   const cooldownRow = createControlRow("冷却 (ms)");
   cooldownRow.appendChild(createNumberInput(node.cooldown || 0, { min: 0, max: 60000, step: 100 }, (value) => {
@@ -1539,9 +1735,117 @@ function renderNodeProperties(scroll) {
       row.appendChild(select);
       dataGroup.appendChild(row);
     }
+    if (node.type === "lockTarget") {
+      renderLockTargetNodeProperties(dataGroup, node, true);
+    } else if (node.type === "attack") {
+      renderAttackNodeProperties(dataGroup, node, true);
+    }
     scroll.appendChild(dataGroup);
   }
 
+  renderNodeActionGroup(scroll, node);
+}
+
+function renderLockTargetNodeProperties(parent, node, inline = false) {
+  node.params.lockTarget = normalizeLockTargetConfig(node.params.lockTarget);
+  const config = node.params.lockTarget;
+  const group = inline ? parent : createFieldGroup("锁定配置");
+  const turnSpeedRow = createControlRow("转身速度");
+  turnSpeedRow.appendChild(createNumberInput(config.turnSpeed, { min: 0.1, max: 20, step: 0.05 }, (value) => {
+    config.turnSpeed = Number(value);
+    node.params.lockTarget = normalizeLockTargetConfig(config);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(turnSpeedRow);
+  if (!inline) parent.appendChild(group);
+}
+
+function renderAttackNodeProperties(parent, node, inline = false) {
+  node.params.attack = normalizeAttackConfig(node.params.attack);
+  const config = node.params.attack;
+  const group = inline ? parent : createFieldGroup("攻击条件");
+
+  const angleRow = createControlRow("可攻击朝向左右角度");
+  angleRow.appendChild(createNumberInput(config.attackAngleDegrees, { min: 0, max: 180, step: 1 }, (value) => {
+    config.attackAngleDegrees = Number(value);
+    node.params.attack = normalizeAttackConfig(config);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(angleRow);
+
+  const distanceRow = createControlRow("可攻击距离");
+  distanceRow.appendChild(createNumberInput(config.attackDistance, { min: 0, max: 50, step: 0.05 }, (value) => {
+    config.attackDistance = Number(value);
+    node.params.attack = normalizeAttackConfig(config);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(distanceRow);
+
+  const moveRow = createControlRow("攻击招式");
+  moveRow.appendChild(createSelect(buildCombatMoveOptions(config.combatMoveId), config.combatMoveId, (value) => {
+    config.combatMoveId = value;
+    node.params.attack = normalizeAttackConfig(config);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(moveRow);
+  if (!inline) parent.appendChild(group);
+}
+
+function renderModeSwitchNodeProperties(scroll, node) {
+  node.params.modeSwitch = normalizeModeSwitchConfig(node.params.modeSwitch, editor.activeTree);
+  const config = node.params.modeSwitch;
+  const group = createFieldGroup("模式切换控制");
+
+  const minRow = createControlRow("最短保持 (ms)");
+  minRow.appendChild(createNumberInput(config.minDurationMs, { min: 0, max: 30000, step: 100 }, (value) => {
+    config.minDurationMs = asInt(value, 0);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(minRow);
+
+  const stableRow = createControlRow("候选稳定 (ms)");
+  stableRow.appendChild(createNumberInput(config.stableDurationMs, { min: 0, max: 30000, step: 100 }, (value) => {
+    config.stableDurationMs = asInt(value, 0);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(stableRow);
+
+  const lostRow = createControlRow("目标丢失缓冲 (ms)");
+  lostRow.appendChild(createNumberInput(config.lostTargetGraceMs, { min: 0, max: 30000, step: 100 }, (value) => {
+    config.lostTargetGraceMs = asInt(value, 0);
+    setDirty();
+    renderGraph();
+  }));
+  group.appendChild(lostRow);
+
+  appendSubhead(group, "可立即打断当前模式");
+  getModeDefinitions()
+    .filter((mode) => mode.key !== editor.activeTree)
+    .forEach((mode) => {
+      group.appendChild(createCheckboxRow(mode.label || mode.key, config.interruptibleBy.includes(mode.key), (checked) => {
+        const next = new Set(config.interruptibleBy);
+        if (checked) next.add(mode.key);
+        else next.delete(mode.key);
+        config.interruptibleBy = Array.from(next);
+        setDirty();
+        renderGraph();
+      }));
+    });
+
+  const note = document.createElement("p");
+  note.className = "mini-note";
+  note.textContent = "大脑 tick 仍会实时给出候选模式；这里控制当前模式至少保持多久、候选结果稳定多久才真正切换，以及哪些高优先模式可立即打断。";
+  group.appendChild(note);
+  scroll.appendChild(group);
+}
+
+function renderNodeActionGroup(scroll, node) {
   const actionGroup = createFieldGroup("操作");
   const deleteBtn = document.createElement("button");
   deleteBtn.className = "btn-delete";
@@ -2256,6 +2560,8 @@ function renderBlackboardProperties(scroll) {
   sourceGroup.appendChild(createInlineText("危险弱者", "dangerScore > 0 且 strength 最低目标"));
   sourceGroup.appendChild(createInlineText("注视目标", "优先使用黑板缓存，否则回退危险最高者"));
   sourceGroup.appendChild(createInlineText("锁定目标", "优先使用锁定缓存，否则回退注视目标/危险弱者"));
+  sourceGroup.appendChild(createInlineText("当前朝向与目标方位角度差", "targetAngleDeltaDegrees"));
+  sourceGroup.appendChild(createInlineText("当前与目标距离差", "targetDistance"));
 
   const randomRow = createControlRow("Random Pos 半径");
   randomRow.appendChild(createNumberInput(brain.blackboardSources.randomPosition?.radius ?? 6, { min: 1, max: 50, step: 1 }, (value) => {
@@ -2320,10 +2626,28 @@ function ensureNodeBindings(node) {
 function getNodeBindingSummary(node) {
   ensureNodeBindings(node);
   const requirements = NODE_DATA_REQUIREMENTS[node.type] || [];
-  return requirements.map((requirement) => {
+  const lines = requirements.map((requirement) => {
     const source = node.params.bindings[requirement.key] || requirement.defaultSource;
     return `${requirement.label}: ${getSelectorLabel(source)}`;
   });
+  if (node.type === "lockTarget") {
+    const config = normalizeLockTargetConfig(node.params?.lockTarget);
+    lines.push(`转身速度: ${formatNumber(config.turnSpeed)}`);
+  } else if (node.type === "attack") {
+    const config = normalizeAttackConfig(node.params?.attack);
+    lines.push(`角度 ±${formatNumber(config.attackAngleDegrees)}° · 距离 ≤ ${formatNumber(config.attackDistance)}`);
+    const move = getCombatMoveById(config.combatMoveId);
+    if (move) lines.push(`招式: ${move.name}`);
+  }
+  return lines;
+}
+
+function getModeSwitchSummary(node) {
+  const config = normalizeModeSwitchConfig(node.params?.modeSwitch, editor.activeTree);
+  const interrupts = config.interruptibleBy.length
+    ? config.interruptibleBy.map(getModeLabel).join("/")
+    : "无立即打断";
+  return `保持 ${config.minDurationMs}ms · 稳定 ${config.stableDurationMs}ms · ${interrupts}`;
 }
 
 function getNodeTypeLabel(type) {
@@ -2332,6 +2656,31 @@ function getNodeTypeLabel(type) {
 
 function getSelectorLabel(key) {
   return TARGET_SELECTOR_TYPES.find((item) => item.key === key)?.label || key;
+}
+
+function buildCombatMoveOptions(selectedMoveId = "") {
+  const moves = editor.combatMoves?.length ? editor.combatMoves : getAllCombatMoves(DEFAULT_COMBAT_MOVE_MANAGER);
+  const options = [{ key: "", label: "按招式表权重自动选择" }];
+  moves.forEach((move) => {
+    options.push({
+      key: move.id,
+      label: `${getCombatMoveDirectionLabel(move.triggerDirection)} / ${move.name} / ${move.actionName}`,
+    });
+  });
+  if (selectedMoveId && !moves.some((move) => move.id === selectedMoveId)) {
+    options.push({ key: selectedMoveId, label: `已保存: ${selectedMoveId} (招式表未找到)` });
+  }
+  return options;
+}
+
+function getCombatMoveById(moveId) {
+  if (!moveId) return null;
+  const moves = editor.combatMoves?.length ? editor.combatMoves : getAllCombatMoves(DEFAULT_COMBAT_MOVE_MANAGER);
+  return moves.find((move) => move.id === moveId) || null;
+}
+
+function getCombatMoveDirectionLabel(directionId) {
+  return COMBAT_MOVE_DIRECTIONS.find((direction) => direction.id === directionId)?.label || directionId || "默认";
 }
 
 function getScoreTargetLabel(key) {
@@ -2459,6 +2808,12 @@ function operatorHasNoValue(operator) {
 function asInt(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) ? Math.round(num) : fallback;
+}
+
+function formatNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "0";
+  return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function cloneData(value) {

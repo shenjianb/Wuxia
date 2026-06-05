@@ -134,6 +134,8 @@ export function aggregateBrainScores(targetScores, context = {}) {
     highestDangerScore: dangerTargets.reduce((highest, item) => Math.max(highest, item.dangerScore), 0),
     strongestDangerStrength,
     selfHealth: asNumber(getEntityAttribute(context.self, "health"), 0),
+    targetAngleDeltaDegrees: asNumber(context.blackboard?.targetAngleDeltaDegrees, 0),
+    targetDistance: asNumber(context.blackboard?.targetDistance, 999999),
   };
 }
 
@@ -209,6 +211,8 @@ export function resolveBlackboard(brain, targetScores, context = {}) {
     lookTarget: context.blackboard?.lookTarget ?? highestDanger?.target ?? null,
     lockedTarget: context.blackboard?.lockedTarget ?? context.blackboard?.lookTarget ?? weakestDanger?.target ?? null,
     randomPosition: context.blackboard?.randomPosition ?? null,
+    targetAngleDeltaDegrees: context.blackboard?.targetAngleDeltaDegrees ?? null,
+    targetDistance: context.blackboard?.targetDistance ?? null,
     fleePosition,
     selfPosition,
   };

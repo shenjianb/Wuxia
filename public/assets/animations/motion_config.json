@@ -108,7 +108,8 @@
     "rootPoseRotation": true,
     "rootPoseRotationAnchor": "clipStart",
     "rootMotionMoveBasis": "characterForward",
-    "visualYawOffsetDegrees": 0
+    "visualYawOffsetDegrees": 0,
+    "rootMotionForwardOnly": false
   },
   "combat_Att_LB_Hand_0": {
     "motionMode": "InPlace",
@@ -125,5 +126,27 @@
     "bakeIntoPoseY": true,
     "bakeIntoPoseRotation": false,
     "rootSwayScale": 1
+  },
+  "combat_Att_F_Hand_2": {
+    "motionMode": "InPlace",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": false,
+    "rootSwayScale": 1.5
+  },
+  "combat_Att_F_Hand_1_Ro": {
+    "motionMode": "RootMotion",
+    "loop": true,
+    "bakeIntoPoseXZ": true,
+    "bakeIntoPoseY": true,
+    "bakeIntoPoseRotation": true,
+    "rootSwayScale": 1.5,
+    "applyRootRotation": false,
+    "rootPoseRotation": true,
+    "rootPoseRotationAnchor": "clipStart",
+    "rootMotionMoveBasis": "characterForward",
+    "rootPoseRotationScale": 1,
+    "rootMotionForwardOnly": true
   }
 }

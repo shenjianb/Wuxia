@@ -2,8 +2,8 @@
   "id": "123",
   "version": 1,
   "created": "2026-05-29T16:35:21.380Z",
-  "modified": "2026-06-02T14:11:02.237Z",
-  "faction": 0,
+  "modified": "2026-06-03T14:07:47.433Z",
+  "faction": 2,
   "modelType": "BaseFemale",
   "attributes": {
     "name": "One",
@@ -19,8 +19,8 @@
     "angle": 120
   },
   "moveSpeed": {
-    "normal": 2,
-    "combat": 1.2
+    "normal": 1.4,
+    "combat": 0.5
   },
   "behaviorTreeId": "bt-mpwonec4"
 }

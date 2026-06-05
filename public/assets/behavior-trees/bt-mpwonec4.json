@@ -3,7 +3,7 @@
   "name": "np1",
   "version": 2,
   "created": "2026-06-02T13:38:08.596Z",
-  "modified": "2026-06-02T13:38:08.603Z",
+  "modified": "2026-06-05T05:20:02.668Z",
   "modeDefinitions": [
     {
       "key": "default",
@@ -46,6 +46,28 @@
           },
           "x": 330,
           "y": 210
+        },
+        {
+          "id": "nd-mpxi07le-23",
+          "type": "modeSwitch",
+          "label": "模式切换",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "modeSwitch": {
+              "minDurationMs": 0,
+              "stableDurationMs": 0,
+              "lostTargetGraceMs": 0,
+              "interruptibleBy": [
+                "alert",
+                "attack",
+                "flee"
+              ]
+            },
+            "bindings": {}
+          },
+          "x": 560,
+          "y": 210
         }
       ],
       "transitions": [
@@ -53,6 +75,14 @@
           "id": "tr-mpwonec4-8",
           "from": "entry",
           "to": "nd-mpwonec4-1",
+          "condition": {
+            "type": "always"
+          }
+        },
+        {
+          "id": "tr-mpxi07le-24",
+          "from": "nd-mpwonec4-1",
+          "to": "nd-mpxi07le-23",
           "condition": {
             "type": "always"
           }
@@ -88,6 +118,27 @@
           },
           "x": 520,
           "y": 160
+        },
+        {
+          "id": "nd-mpxi07le-25",
+          "type": "modeSwitch",
+          "label": "模式切换",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "modeSwitch": {
+              "minDurationMs": 1200,
+              "stableDurationMs": 700,
+              "lostTargetGraceMs": 1200,
+              "interruptibleBy": [
+                "attack",
+                "flee"
+              ]
+            },
+            "bindings": {}
+          },
+          "x": 750,
+          "y": 160
         }
       ],
       "transitions": [
@@ -103,6 +154,14 @@
           "id": "tr-mpwonec4-10",
           "from": "nd-mpwonec4-2",
           "to": "nd-mpwonec4-3",
+          "condition": {
+            "type": "always"
+          }
+        },
+        {
+          "id": "tr-mpxi07le-26",
+          "from": "nd-mpwonec4-3",
+          "to": "nd-mpxi07le-25",
           "condition": {
             "type": "always"
           }
@@ -134,6 +193,9 @@
           "params": {
             "bindings": {
               "targetPos": "lookTarget"
+            },
+            "lockTarget": {
+              "turnSpeed": 0.5
             }
           },
           "x": 470,
@@ -148,9 +210,34 @@
           "params": {
             "bindings": {
               "targetPos": "lockedTarget"
+            },
+            "attack": {
+              "attackAngleDegrees": 20,
+              "attackDistance": 1.45,
+              "combatMoveId": "move-forward-hand-1-ro"
             }
           },
           "x": 680,
+          "y": 150
+        },
+        {
+          "id": "nd-mpxi07le-27",
+          "type": "modeSwitch",
+          "label": "模式切换",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "modeSwitch": {
+              "minDurationMs": 1600,
+              "stableDurationMs": 900,
+              "lostTargetGraceMs": 1500,
+              "interruptibleBy": [
+                "flee"
+              ]
+            },
+            "bindings": {}
+          },
+          "x": 910,
           "y": 150
         }
       ],
@@ -178,6 +265,14 @@
           "condition": {
             "type": "always"
           }
+        },
+        {
+          "id": "tr-mpxi07le-28",
+          "from": "nd-mpwonec4-6",
+          "to": "nd-mpxi07le-27",
+          "condition": {
+            "type": "always"
+          }
         }
       ]
     },
@@ -194,8 +289,26 @@
               "destinationPos": "fleeFromHighestDanger"
             }
           },
-          "x": 330,
-          "y": 210
+          "x": 288,
+          "y": 202
+        },
+        {
+          "id": "nd-mpxi07le-29",
+          "type": "modeSwitch",
+          "label": "模式切换",
+          "cooldown": 0,
+          "cooldownModifiable": false,
+          "params": {
+            "modeSwitch": {
+              "minDurationMs": 2500,
+              "stableDurationMs": 1000,
+              "lostTargetGraceMs": 1200,
+              "interruptibleBy": []
+            },
+            "bindings": {}
+          },
+          "x": 518,
+          "y": 202
         }
       ],
       "transitions": [
@@ -206,22 +319,30 @@
           "condition": {
             "type": "always"
           }
+        },
+        {
+          "id": "tr-mpxi07le-30",
+          "from": "nd-mpwonec4-7",
+          "to": "nd-mpxi07le-29",
+          "condition": {
+            "type": "always"
+          }
         }
       ]
     }
   },
   "brain": {
     "tickIntervalMs": 300,
-    "decisionCooldownMs": 1000,
+    "decisionCooldownMs": 1200,
     "fallbackMode": "default",
     "profileRefs": {
-      "brainProcessing": "",
-      "personality": ""
+      "brainProcessing": "human-standard",
+      "personality": "brave"
     },
     "scoringRules": [
       {
-        "id": "score-hostile-faction",
-        "name": "阵营不一致",
+        "id": "animal-hostile-faction",
+        "name": "异阵营即危险",
         "enabled": true,
         "conditions": [
           {
@@ -231,11 +352,11 @@
           }
         ],
         "scoreTarget": "dangerScore",
-        "score": 5
+        "score": 20
       },
       {
-        "id": "score-hostile-low-health",
-        "name": "敌方生命低",
+        "id": "animal-hostile-strong",
+        "name": "异阵营强壮",
         "enabled": true,
         "conditions": [
           {
@@ -244,108 +365,51 @@
             "value": ""
           },
           {
-            "attribute": "health",
-            "operator": "lte",
-            "value": 30
+            "attribute": "strength",
+            "operator": "gte",
+            "value": 50
           }
         ],
         "scoreTarget": "dangerScore",
+        "score": 10
+      },
+      {
+        "id": "animal-hostile-looking",
+        "name": "异阵营注视我",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "neSelf",
+            "value": ""
+          },
+          {
+            "attribute": "attentionToMe",
+            "operator": "truthy",
+            "value": true
+          }
+        ],
+        "scoreTarget": "dangerScore",
+        "score": 20
+      },
+      {
+        "id": "animal-same-faction",
+        "name": "同阵营安全",
+        "enabled": true,
+        "conditions": [
+          {
+            "attribute": "faction",
+            "operator": "eqSelf",
+            "value": ""
+          }
+        ],
+        "scoreTarget": "safeScore",
         "score": 2
-      },
-      {
-        "id": "score-hostile-strong",
-        "name": "敌方强壮",
-        "enabled": true,
-        "conditions": [
-          {
-            "attribute": "faction",
-            "operator": "neSelf",
-            "value": ""
-          },
-          {
-            "attribute": "strength",
-            "operator": "gte",
-            "value": 60
-          }
-        ],
-        "scoreTarget": "dangerScore",
-        "score": 3
-      },
-      {
-        "id": "score-hostile-looking",
-        "name": "敌方注视我",
-        "enabled": true,
-        "conditions": [
-          {
-            "attribute": "faction",
-            "operator": "neSelf",
-            "value": ""
-          },
-          {
-            "attribute": "attentionToMe",
-            "operator": "truthy",
-            "value": true
-          }
-        ],
-        "scoreTarget": "dangerScore",
-        "score": 10
-      },
-      {
-        "id": "score-friendly-faction",
-        "name": "阵营一致",
-        "enabled": true,
-        "conditions": [
-          {
-            "attribute": "faction",
-            "operator": "eqSelf",
-            "value": ""
-          }
-        ],
-        "scoreTarget": "safeScore",
-        "score": 5
-      },
-      {
-        "id": "score-friendly-strong",
-        "name": "友方强壮",
-        "enabled": true,
-        "conditions": [
-          {
-            "attribute": "faction",
-            "operator": "eqSelf",
-            "value": ""
-          },
-          {
-            "attribute": "strength",
-            "operator": "gte",
-            "value": 60
-          }
-        ],
-        "scoreTarget": "safeScore",
-        "score": 10
-      },
-      {
-        "id": "score-friendly-looking",
-        "name": "友方注视我",
-        "enabled": true,
-        "conditions": [
-          {
-            "attribute": "faction",
-            "operator": "eqSelf",
-            "value": ""
-          },
-          {
-            "attribute": "attentionToMe",
-            "operator": "truthy",
-            "value": true
-          }
-        ],
-        "scoreTarget": "safeScore",
-        "score": 10
       }
     ],
     "decisionRules": [
       {
-        "id": "decision-flee-low-health",
+        "id": "cautious-flee-low-health",
         "name": "低生命逃跑",
         "enabled": true,
         "priority": 10,
@@ -353,7 +417,7 @@
           {
             "metric": "selfHealth",
             "operator": "lte",
-            "value": 20
+            "value": 25
           },
           {
             "metric": "dangerScore",
@@ -364,43 +428,24 @@
         "outputMode": "flee"
       },
       {
-        "id": "decision-flee-danger-ratio",
+        "id": "cautious-flee-danger",
         "name": "危险占比过高",
-        "enabled": true,
+        "enabled": false,
         "priority": 20,
         "conditions": [
           {
             "metric": "dangerRatio",
             "operator": "gte",
-            "value": 0.7
+            "value": 0.65
           }
         ],
         "outputMode": "flee"
       },
       {
-        "id": "decision-attack-danger",
-        "name": "进入攻击",
-        "enabled": true,
+        "id": "cautious-alert-safe",
+        "name": "安全占优但有风险",
+        "enabled": false,
         "priority": 30,
-        "conditions": [
-          {
-            "metric": "dangerScore",
-            "operator": "gte",
-            "value": 10
-          },
-          {
-            "metric": "dangerRatio",
-            "operator": "gte",
-            "value": 0.35
-          }
-        ],
-        "outputMode": "attack"
-      },
-      {
-        "id": "decision-alert-cautious",
-        "name": "谨慎警惕",
-        "enabled": true,
-        "priority": 40,
         "conditions": [
           {
             "metric": "safeRatio",
@@ -416,18 +461,37 @@
         "outputMode": "alert"
       },
       {
-        "id": "decision-default-empty",
-        "name": "无可见目标",
+        "id": "cautious-attack",
+        "name": "确认攻击",
         "enabled": true,
-        "priority": 90,
+        "priority": 100,
         "conditions": [
           {
-            "metric": "visibleTargetCount",
-            "operator": "lte",
-            "value": 0
+            "metric": "dangerScore",
+            "operator": "gte",
+            "value": 15
+          },
+          {
+            "metric": "dangerRatio",
+            "operator": "gte",
+            "value": 0.45
           }
         ],
-        "outputMode": "default"
+        "outputMode": "attack"
+      },
+      {
+        "id": "decision-mpwrewsm-15",
+        "name": "新决策规则",
+        "enabled": false,
+        "priority": 50,
+        "conditions": [
+          {
+            "metric": "dangerRatio",
+            "operator": "gte",
+            "value": 0.5
+          }
+        ],
+        "outputMode": "alert"
       }
     ],
     "blackboardSources": {
@@ -462,8 +526,10 @@
         "strength": 45,
         "agility": 10,
         "reaction": 10,
+        "distance": 2,
+        "attentionToMe": false,
         "position": [
-          0,
+          2,
           0,
           0
         ]
@@ -498,9 +564,9 @@
           "distance": 3,
           "attentionToMe": true,
           "position": [
-            -2,
+            3,
             0,
-            1
+            0
           ]
         }
       ]
@@ -522,6 +588,28 @@
         },
         "x": 330,
         "y": 210
+      },
+      {
+        "id": "nd-mpxi07le-23",
+        "type": "modeSwitch",
+        "label": "模式切换",
+        "cooldown": 0,
+        "cooldownModifiable": false,
+        "params": {
+          "modeSwitch": {
+            "minDurationMs": 0,
+            "stableDurationMs": 0,
+            "lostTargetGraceMs": 0,
+            "interruptibleBy": [
+              "alert",
+              "attack",
+              "flee"
+            ]
+          },
+          "bindings": {}
+        },
+        "x": 560,
+        "y": 210
       }
     ],
     "transitions": [
@@ -529,6 +617,14 @@
         "id": "tr-mpwonec4-8",
         "from": "entry",
         "to": "nd-mpwonec4-1",
+        "condition": {
+          "type": "always"
+        }
+      },
+      {
+        "id": "tr-mpxi07le-24",
+        "from": "nd-mpwonec4-1",
+        "to": "nd-mpxi07le-23",
         "condition": {
           "type": "always"
         }
@@ -560,6 +656,9 @@
         "params": {
           "bindings": {
             "targetPos": "lookTarget"
+          },
+          "lockTarget": {
+            "turnSpeed": 0.5
           }
         },
         "x": 470,
@@ -574,9 +673,34 @@
         "params": {
           "bindings": {
             "targetPos": "lockedTarget"
+          },
+          "attack": {
+            "attackAngleDegrees": 20,
+            "attackDistance": 1.45,
+            "combatMoveId": "move-forward-hand-1-ro"
           }
         },
         "x": 680,
+        "y": 150
+      },
+      {
+        "id": "nd-mpxi07le-27",
+        "type": "modeSwitch",
+        "label": "模式切换",
+        "cooldown": 0,
+        "cooldownModifiable": false,
+        "params": {
+          "modeSwitch": {
+            "minDurationMs": 1600,
+            "stableDurationMs": 900,
+            "lostTargetGraceMs": 1500,
+            "interruptibleBy": [
+              "flee"
+            ]
+          },
+          "bindings": {}
+        },
+        "x": 910,
         "y": 150
       }
     ],
@@ -601,6 +725,14 @@
         "id": "tr-mpwonec4-13",
         "from": "nd-mpwonec4-5",
         "to": "nd-mpwonec4-6",
+        "condition": {
+          "type": "always"
+        }
+      },
+      {
+        "id": "tr-mpxi07le-28",
+        "from": "nd-mpwonec4-6",
+        "to": "nd-mpxi07le-27",
         "condition": {
           "type": "always"
         }

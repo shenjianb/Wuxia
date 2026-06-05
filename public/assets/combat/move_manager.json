@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "directions": {
+    "forward": {
+      "id": "forward",
+      "label": "前向",
+      "key": "W",
+      "moves": [
+        {
+          "id": "move-forward-hand-1-ro",
+          "name": "前向回身手击",
+          "triggerDirection": "forward",
+          "actionFile": "Anim_Combat_Att_F_Hand_1_Ro.glb",
+          "actionName": "combat_Att_F_Hand_1_Ro",
+          "weight": 23,
+          "strength": 2
+        },
+        {
+          "id": "move-forward-hand-2",
+          "name": "前向手击二式",
+          "triggerDirection": "forward",
+          "actionFile": "Anim_Combat_Att_F_Hand_2.glb",
+          "actionName": "combat_Att_F_Hand_2",
+          "weight": 23,
+          "strength": 1
+        }
+      ]
+    },
+    "left": {
+      "id": "left",
+      "label": "左向",
+      "key": "A",
+      "moves": [
+        {
+          "id": "move-left-back-hand-0",
+          "name": "左向手击",
+          "triggerDirection": "left",
+          "actionFile": "Anim_Combat_Att_LB_Hand_0.glb",
+          "actionName": "combat_Att_LB_Hand_0",
+          "weight": 100,
+          "strength": 1
+        }
+      ]
+    },
+    "right": {
+      "id": "right",
+      "label": "右向",
+      "key": "D",
+      "moves": [
+        {
+          "id": "move-right-back-hand-0",
+          "name": "右向手击",
+          "triggerDirection": "right",
+          "actionFile": "Anim_Combat_Att_RB_Hand_0.glb",
+          "actionName": "combat_Att_RB_Hand_0",
+          "weight": 100,
+          "strength": 1
+        }
+      ]
+    }
+  }
+}

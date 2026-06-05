@@ -1,9 +1,20 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createFacingMarker } from "./facing-marker.js";
+import { evaluateNpcBrain } from "./npc-ai-runtime.js";
+import {
+  COMBAT_MOVE_DIRECTIONS,
+  DEFAULT_COMBAT_MOVE_MANAGER,
+  chooseWeightedCombatMove,
+  getAllCombatMoves,
+  getCombatMoveActionNames,
+  getCombatMovesForDirection,
+  inferAnimationFileForActionName,
+  normalizeCombatMoveManager,
+} from "./combat-move-manager.js";
 import "./styles.css";
 
-const ASSET_VERSION = "combat-interaction-20260527-01";
+const ASSET_VERSION = "move-manager-20260603-01";
 const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
 
 const ASSETS = {
@@ -20,9 +31,6 @@ const ASSETS = {
     combatWalk: assetUrl("./assets/animations/Anim_Combat_Walk_Short_F_Hand.glb"),
     combatTurnLeft: assetUrl("./assets/animations/Anim_Combat_Idle_Turn_L_Hand.glb"),
     combatTurnRight: assetUrl("./assets/animations/Anim_Combat_Idle_Turn_R_Hand.glb"),
-    combat_Att_F_Hand_1: assetUrl("./assets/animations/Anim_Combat_Att_F_Hand_1.glb"),
-    combat_Att_LB_Hand_0: assetUrl("./assets/animations/Anim_Combat_Att_LB_Hand_0.glb"),
-    combat_Att_RB_Hand_0: assetUrl("./assets/animations/Anim_Combat_Att_RB_Hand_0.glb"),
   },
 };
 
@@ -41,16 +49,55 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const ACTION_FADE_DURATION = 0.22;
 const ROOT_MOTION_BLEND_OUT_GRACE = ACTION_FADE_DURATION + 0.1;
 const COMBAT_ATTACK_RECOVERY_DURATION = 0.3;
-const COMBAT_ATTACK_INPUTS = {
-  KeyW: { direction: "forward", actionName: "combat_Att_F_Hand_1" },
-  KeyA: { direction: "leftBack", actionName: "combat_Att_LB_Hand_0" },
-  KeyD: { direction: "rightBack", actionName: "combat_Att_RB_Hand_0" },
-};
-const COMBAT_ATTACK_DIRECTIONS = Object.values(COMBAT_ATTACK_INPUTS).map((input) => input.direction);
-const COMBAT_ATTACK_ACTION_BY_DIRECTION = Object.fromEntries(
-  Object.values(COMBAT_ATTACK_INPUTS).map((input) => [input.direction, input.actionName]),
+const COMBAT_ATTACK_INPUTS = Object.fromEntries(
+  COMBAT_MOVE_DIRECTIONS.map((direction) => [direction.inputCode, { direction: direction.id }]),
 );
-const COMBAT_ATTACK_ACTION_NAMES = new Set(Object.values(COMBAT_ATTACK_ACTION_BY_DIRECTION));
+const COMBAT_ATTACK_DIRECTIONS = COMBAT_MOVE_DIRECTIONS.map((direction) => direction.id);
+const RUNTIME_NPC_NAME = "ONE";
+const PLAYER_DEFAULT_FACTION = 0;
+const PLAYER_DEFAULT_ATTRIBUTES = {
+  name: "Player",
+  willpower: 10,
+  health: 100,
+  stamina: 100,
+  strength: 10,
+  agility: 10,
+  reaction: 10,
+};
+const NPC_SPAWN_OFFSET = new THREE.Vector3(2.4, 0, 1.2);
+const NPC_RANDOM_REACH_DISTANCE = 0.35;
+const NPC_ATTACK_RANGE = 1.45;
+const NPC_ATTACK_COOLDOWN = 1.2;
+const DEFAULT_LOCK_TURN_SPEED = TURN_SPEED;
+const DEFAULT_ATTACK_ARC_DEGREES = 20;
+const DEFAULT_ATTACK_DISTANCE = NPC_ATTACK_RANGE;
+const DEFAULT_MODE_SWITCH_CONFIGS = {
+  default: { minDurationMs: 0, stableDurationMs: 0, lostTargetGraceMs: 0, interruptibleBy: ["alert", "attack", "flee"] },
+  alert: { minDurationMs: 1200, stableDurationMs: 700, lostTargetGraceMs: 1200, interruptibleBy: ["attack", "flee"] },
+  attack: { minDurationMs: 1600, stableDurationMs: 900, lostTargetGraceMs: 1500, interruptibleBy: ["flee"] },
+  flee: { minDurationMs: 2500, stableDurationMs: 1000, lostTargetGraceMs: 1200, interruptibleBy: [] },
+  custom: { minDurationMs: 1200, stableDurationMs: 800, lostTargetGraceMs: 1200, interruptibleBy: ["attack", "flee"] },
+};
+
+function createCombatAttackState() {
+  return {
+    keys: {
+      forward: false,
+      left: false,
+      right: false,
+    },
+    active: false,
+    activeDirection: null,
+    activeActionName: null,
+    activeActionFile: null,
+    activeMoveId: null,
+    activeMoveName: null,
+    activeStrength: 1,
+    queuedDirection: null,
+    recoveryTimer: 0,
+    aiCooldown: 0,
+  };
+}
 
 const app = document.querySelector("#app");
 const DEBUG_VIEW = new URLSearchParams(window.location.search).has("debug");
@@ -92,18 +139,7 @@ const state = {
   },
   globalMotionMode: "InPlace",
   combatMode: false,
-  combatAttack: {
-    keys: {
-      forward: false,
-      leftBack: false,
-      rightBack: false,
-    },
-    active: false,
-    activeDirection: null,
-    activeActionName: null,
-    queuedDirection: null,
-    recoveryTimer: 0,
-  },
+  combatAttack: createCombatAttackState(),
 };
 
 const loader = new GLTFLoader();
@@ -149,9 +185,13 @@ let renderer;
 let characters;
 let animations;
 let motionConfig = {};
+let combatMoveManager = normalizeCombatMoveManager(DEFAULT_COMBAT_MOVE_MANAGER);
+let combatAttackActionNames = new Set(getCombatMoveActionNames(combatMoveManager));
 let selectionSet;
 let worldSet;
 let player;
+let runtimeNpcs = [];
+let runtimeNpcLoadPromise = null;
 let obstacles = [];
 const rootMarkerWorldPosition = new THREE.Vector3();
 const facingMarkerWorldPosition = new THREE.Vector3();
@@ -196,11 +236,15 @@ async function boot() {
         combatTurnLeft: { motionMode: "InPlace", loop: true, visualYawOffsetDegrees: -50, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
         combatTurnRight: { motionMode: "InPlace", loop: true, visualYawOffsetDegrees: -50, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
         combat_Att_F_Hand_1: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1.5 },
+        combat_Att_F_Hand_1_Ro: { motionMode: "RootMotion", loop: false, bakeIntoPoseXZ: false, bakeIntoPoseY: true, bakeIntoPoseRotation: true, rootSwayScale: 1.5, applyRootRotation: false, rootPoseRotation: true, rootPoseRotationAnchor: "clipStart", rootMotionMoveBasis: "characterForward" },
+        combat_Att_F_Hand_2: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1.5 },
         combat_Att_LB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 },
         combat_Att_RB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 }
       };
     }
 
+    combatMoveManager = await loadCombatMoveManager();
+    registerCombatMoveAnimationAssets();
     animations = await loadAnimations();
     characters = {
       male: await createCharacter("male", ASSETS.models.male),
@@ -225,44 +269,36 @@ async function boot() {
 }
 
 async function loadAnimations() {
-  const [
-    idleGltf,
-    walkGltf,
-    turnLeftGltf,
-    turnRightGltf,
-    combatIdleGltf,
-    combatWalkGltf,
-    combatTurnLeftGltf,
-    combatTurnRightGltf,
-    combatAttackForwardGltf,
-    combatAttackLeftBackGltf,
-    combatAttackRightBackGltf,
-  ] = await Promise.all([
-    loader.loadAsync(ASSETS.animations.idle),
-    loader.loadAsync(ASSETS.animations.walk),
-    loader.loadAsync(ASSETS.animations.turnLeft),
-    loader.loadAsync(ASSETS.animations.turnRight),
-    loader.loadAsync(ASSETS.animations.combatIdle),
-    loader.loadAsync(ASSETS.animations.combatWalk),
-    loader.loadAsync(ASSETS.animations.combatTurnLeft),
-    loader.loadAsync(ASSETS.animations.combatTurnRight),
-    loader.loadAsync(ASSETS.animations.combat_Att_F_Hand_1),
-    loader.loadAsync(ASSETS.animations.combat_Att_LB_Hand_0),
-    loader.loadAsync(ASSETS.animations.combat_Att_RB_Hand_0),
-  ]);
-  return {
-    idle: mergeAnimationClips(idleGltf.animations, "idle"),
-    walk: mergeAnimationClips(walkGltf.animations, "walk"),
-    turnLeft: mergeAnimationClips(turnLeftGltf.animations, "turnLeft"),
-    turnRight: mergeAnimationClips(turnRightGltf.animations, "turnRight"),
-    combatIdle: mergeAnimationClips(combatIdleGltf.animations, "combatIdle"),
-    combatWalk: mergeAnimationClips(combatWalkGltf.animations, "combatWalk"),
-    combatTurnLeft: mergeAnimationClips(combatTurnLeftGltf.animations, "combatTurnLeft"),
-    combatTurnRight: mergeAnimationClips(combatTurnRightGltf.animations, "combatTurnRight"),
-    combat_Att_F_Hand_1: mergeAnimationClips(combatAttackForwardGltf.animations, "combat_Att_F_Hand_1"),
-    combat_Att_LB_Hand_0: mergeAnimationClips(combatAttackLeftBackGltf.animations, "combat_Att_LB_Hand_0"),
-    combat_Att_RB_Hand_0: mergeAnimationClips(combatAttackRightBackGltf.animations, "combat_Att_RB_Hand_0"),
-  };
+  const entries = await Promise.all(
+    Object.entries(ASSETS.animations).map(async ([name, url]) => {
+      const gltf = await loader.loadAsync(url);
+      return [name, mergeAnimationClips(gltf.animations, name)];
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
+async function loadCombatMoveManager() {
+  try {
+    const response = await fetch(assetUrl("./assets/combat/move_manager.json"), { cache: "no-store" });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return normalizeCombatMoveManager(await response.json());
+  } catch (error) {
+    console.warn("未能加载招式管理器配置，使用默认招式池:", error);
+    return normalizeCombatMoveManager(DEFAULT_COMBAT_MOVE_MANAGER);
+  }
+}
+
+function registerCombatMoveAnimationAssets() {
+  combatMoveManager = normalizeCombatMoveManager(combatMoveManager);
+  combatAttackActionNames = new Set(getCombatMoveActionNames(combatMoveManager));
+  getAllCombatMoves(combatMoveManager).forEach((move) => {
+    const actionName = move.actionName;
+    if (ASSETS.animations[actionName]) return;
+    const fileName = move.actionFile || inferAnimationFileForActionName(actionName, [], motionConfig);
+    if (!fileName) return;
+    ASSETS.animations[actionName] = assetUrl(`./assets/animations/${fileName}`);
+  });
 }
 
 function mergeAnimationClips(clips, name) {
@@ -608,27 +644,21 @@ async function createCharacter(gender, url) {
 }
 
 function createCharacterActions(mixer, model) {
-  const actions = {
-    idle: mixer.clipAction(filterAnimationTracks(animations.idle, model)),
-    walk: mixer.clipAction(filterAnimationTracks(animations.walk, model)),
-    turnLeft: mixer.clipAction(filterAnimationTracks(animations.turnLeft, model)),
-    turnRight: mixer.clipAction(filterAnimationTracks(animations.turnRight, model)),
-    combatIdle: mixer.clipAction(filterAnimationTracks(animations.combatIdle, model)),
-    combatWalk: mixer.clipAction(filterAnimationTracks(animations.combatWalk, model)),
-    combatTurnLeft: mixer.clipAction(filterAnimationTracks(animations.combatTurnLeft, model)),
-    combatTurnRight: mixer.clipAction(filterAnimationTracks(animations.combatTurnRight, model)),
-    combat_Att_F_Hand_1: mixer.clipAction(filterAnimationTracks(animations.combat_Att_F_Hand_1, model)),
-    combat_Att_LB_Hand_0: mixer.clipAction(filterAnimationTracks(animations.combat_Att_LB_Hand_0, model)),
-    combat_Att_RB_Hand_0: mixer.clipAction(filterAnimationTracks(animations.combat_Att_RB_Hand_0, model)),
-  };
+  const actions = Object.fromEntries(
+    Object.entries(animations).map(([actionName, clip]) => [
+      actionName,
+      mixer.clipAction(filterAnimationTracks(clip, model)),
+    ]),
+  );
   Object.entries(actions).forEach(([actionName, action]) => configureAnimationAction(actionName, action));
   return actions;
 }
 
 function configureAnimationAction(actionName, action) {
   const config = motionConfig[actionName] || {};
-  action.clampWhenFinished = config.loop === false;
-  action.setLoop(config.loop === false ? THREE.LoopOnce : THREE.LoopRepeat, config.loop === false ? 1 : Infinity);
+  const playOnce = config.loop === false || isCombatAttackAction(actionName);
+  action.clampWhenFinished = playOnce;
+  action.setLoop(playOnce ? THREE.LoopOnce : THREE.LoopRepeat, playOnce ? 1 : Infinity);
   action.timeScale = 1;
   action.paused = false;
 }
@@ -966,7 +996,397 @@ function enterWorld() {
   scene.add(player.root);
   player.root.position.set(0, 0, 0);
   player.root.rotation.y = Math.PI;
+  player.runtime = {
+    id: "player",
+    name: state.selectedGender === "female" ? "Female Player" : "Male Player",
+    faction: PLAYER_DEFAULT_FACTION,
+    attributes: { ...PLAYER_DEFAULT_ATTRIBUTES },
+  };
   cameraTarget.set(0, 1, 0);
+  spawnRuntimeNpcOneNearPlayer();
+}
+
+async function spawnRuntimeNpcOneNearPlayer() {
+  if (!player || runtimeNpcLoadPromise || runtimeNpcs.some((npc) => isRuntimeNpcOne(npc.data))) return;
+  runtimeNpcLoadPromise = (async () => {
+    try {
+      const npcData = await loadRuntimeNpcByName(RUNTIME_NPC_NAME);
+      if (!npcData) {
+        console.warn(`Runtime NPC "${RUNTIME_NPC_NAME}" not found.`);
+        return;
+      }
+
+      const behaviorTree = npcData.behaviorTreeId
+        ? await loadBehaviorTreeForRuntime(npcData.behaviorTreeId)
+        : null;
+      const modelUrl = getNpcModelUrl(npcData.modelType);
+      const character = await createCharacter(`npc-${npcData.id || RUNTIME_NPC_NAME}`, modelUrl);
+      character.root.name = `RuntimeNPC_${npcData.id || RUNTIME_NPC_NAME}`;
+      character.runtime = {
+        id: npcData.id || RUNTIME_NPC_NAME,
+        name: npcData.attributes?.name || npcData.id || RUNTIME_NPC_NAME,
+        faction: npcData.faction ?? 0,
+        attributes: { ...PLAYER_DEFAULT_ATTRIBUTES, ...(npcData.attributes || {}) },
+      };
+
+      const spawnOffset = NPC_SPAWN_OFFSET.clone().applyAxisAngle(WORLD_UP, player.root.rotation.y);
+      character.root.position.copy(player.root.position).add(spawnOffset);
+      faceCharacterToward(character, player.root.position, 1, true);
+      scene.add(character.root);
+      characters[`npc-${character.runtime.id}`] = character;
+
+      const runtimeNpc = {
+        data: npcData,
+        character,
+        behaviorTree,
+        vision: normalizeNpcVision(npcData.vision),
+        moveSpeed: normalizeNpcMoveSpeed(npcData.moveSpeed),
+        blackboard: {
+          randomPosition: null,
+          lookTarget: null,
+          lockedTarget: null,
+          targetAngleDeltaDegrees: null,
+          targetDistance: null,
+          activeAttackNodeId: null,
+          selectedAttackMoveId: null,
+        },
+        ai: {
+          tickTimer: 0,
+          mode: behaviorTree?.brain?.fallbackMode || "default",
+          candidateMode: behaviorTree?.brain?.fallbackMode || "default",
+          pendingMode: null,
+          pendingElapsed: 0,
+          modeElapsed: 0,
+          noVisibleTargetElapsed: 0,
+          result: null,
+          visibleTargets: [],
+        },
+        combatAttack: createCombatAttackState(),
+        visionHelper: null,
+        modeLabel: null,
+      };
+      runtimeNpc.visionHelper = createNpcVisionHelper(runtimeNpc.vision);
+      character.root.add(runtimeNpc.visionHelper);
+      runtimeNpc.modeLabel = createNpcModeLabel(runtimeNpc);
+      scene.add(runtimeNpc.modeLabel.group);
+      runtimeNpcs.push(runtimeNpc);
+    } catch (error) {
+      console.error("Failed to spawn runtime NPC:", error);
+    } finally {
+      runtimeNpcLoadPromise = null;
+    }
+  })();
+  await runtimeNpcLoadPromise;
+}
+
+function isRuntimeNpcOne(npcData) {
+  const name = String(npcData?.attributes?.name || npcData?.name || npcData?.id || "").toUpperCase();
+  return name === RUNTIME_NPC_NAME;
+}
+
+async function loadRuntimeNpcByName(targetName) {
+  try {
+    const listData = await fetchJson("/api/npcs");
+    const target = (listData.npcs || []).find((npc) => {
+      const id = String(npc.id || "").toUpperCase();
+      const name = String(npc.name || "").toUpperCase();
+      return id === targetName || name === targetName;
+    });
+    if (target?.id) return fetchJson(`/api/npcs/${encodeURIComponent(target.id)}`);
+  } catch (error) {
+    console.warn("NPC API list unavailable, trying static NPC files.", error);
+  }
+
+  const staticCandidates = [
+    `./assets/npcs/${targetName}.json`,
+    `./assets/npcs/${targetName.toLowerCase()}.json`,
+    `./assets/npcs/${targetName[0]}${targetName.slice(1).toLowerCase()}.json`,
+  ];
+  for (const url of staticCandidates) {
+    try {
+      const data = await fetchJson(url);
+      if (isRuntimeNpcOne(data)) return data;
+    } catch {
+      // Try the next static candidate.
+    }
+  }
+  return null;
+}
+
+async function loadBehaviorTreeForRuntime(treeId) {
+  try {
+    return await fetchJson(`/api/behavior-trees/${encodeURIComponent(treeId)}`);
+  } catch {
+    return fetchJson(`./assets/behavior-trees/${encodeURIComponent(treeId)}.json`);
+  }
+}
+
+async function fetchJson(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${url} ${resp.status}`);
+  return resp.json();
+}
+
+function getNpcModelUrl(modelType) {
+  return modelType === "BaseFemale" ? ASSETS.models.female : ASSETS.models.male;
+}
+
+function normalizeNpcVision(vision = {}) {
+  return {
+    distance: Number.isFinite(Number(vision.distance)) ? Number(vision.distance) : 15,
+    angle: Number.isFinite(Number(vision.angle)) ? Number(vision.angle) : 120,
+  };
+}
+
+function normalizeNpcMoveSpeed(moveSpeed = {}) {
+  return {
+    normal: Number.isFinite(Number(moveSpeed.normal)) ? Number(moveSpeed.normal) : PLAYER_SPEED,
+    combat: Number.isFinite(Number(moveSpeed.combat)) ? Number(moveSpeed.combat) : 1.2,
+  };
+}
+
+function createNpcVisionHelper(vision) {
+  const group = new THREE.Group();
+  group.name = "NPCVisionCone";
+  const material = new THREE.LineBasicMaterial({
+    color: 0x79f2d0,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+  });
+  const line = new THREE.LineSegments(new THREE.BufferGeometry(), material);
+  line.renderOrder = 3;
+  group.add(line);
+  group.position.y = 0.045;
+  updateNpcVisionHelperGeometry(group, vision);
+  return group;
+}
+
+function updateNpcVisionHelperGeometry(group, vision) {
+  const line = group.children[0];
+  if (!line) return;
+  const distance = Math.max(0.1, Number(vision.distance) || 15);
+  const angle = THREE.MathUtils.degToRad(Math.max(1, Math.min(360, Number(vision.angle) || 120)));
+  const half = angle / 2;
+  const segments = 32;
+  const points = [];
+  let previous = null;
+
+  for (let i = 0; i <= segments; i += 1) {
+    const t = i / segments;
+    const theta = -half + angle * t;
+    const point = new THREE.Vector3(Math.sin(theta) * distance, 0, Math.cos(theta) * distance);
+    if (previous) {
+      points.push(previous.x, previous.y, previous.z, point.x, point.y, point.z);
+    }
+    if (i === 0 || i === segments || i % 8 === 0) {
+      points.push(0, 0, 0, point.x, point.y, point.z);
+    }
+    previous = point;
+  }
+
+  line.geometry.dispose();
+  line.geometry = new THREE.BufferGeometry();
+  line.geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+  group.userData.visionDistance = distance;
+  group.userData.visionAngle = vision.angle;
+}
+
+function refreshNpcVisionHelper(runtimeNpc) {
+  if (!runtimeNpc.visionHelper) return;
+  const distanceChanged = runtimeNpc.visionHelper.userData.visionDistance !== runtimeNpc.vision.distance;
+  const angleChanged = runtimeNpc.visionHelper.userData.visionAngle !== runtimeNpc.vision.angle;
+  if (distanceChanged || angleChanged) {
+    updateNpcVisionHelperGeometry(runtimeNpc.visionHelper, runtimeNpc.vision);
+  }
+  runtimeNpc.visionHelper.visible = state.mode === "game" && runtimeNpc.character.root.visible;
+}
+
+function createNpcModeLabel(runtimeNpc) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 128;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const group = new THREE.Group();
+  group.name = "NPCModeLabel";
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.48), material);
+  mesh.renderOrder = 4;
+  group.add(mesh);
+  group.renderOrder = 4;
+  const label = {
+    group,
+    canvas,
+    texture,
+    lastText: "",
+  };
+  updateNpcModeLabelText(label, getNpcBehaviorModeLabel(runtimeNpc.ai.mode));
+  updateNpcModeLabelTransform(runtimeNpc);
+  return label;
+}
+
+function getNpcBehaviorModeLabel(mode) {
+  const labels = {
+    default: "默认",
+    alert: "警惕",
+    attack: "战斗",
+    flee: "逃跑",
+  };
+  return labels[mode] || mode || "默认";
+}
+
+function updateNpcModeLabelText(label, text) {
+  if (!label || label.lastText === text) return;
+  label.lastText = text;
+  const ctx = label.canvas.getContext("2d");
+  ctx.clearRect(0, 0, label.canvas.width, label.canvas.height);
+  ctx.fillStyle = "rgba(6, 14, 12, 0.78)";
+  ctx.strokeStyle = "rgba(121, 242, 208, 0.95)";
+  ctx.lineWidth = 6;
+  roundRect(ctx, 18, 18, 476, 92, 22);
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = "700 46px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#eafbf5";
+  ctx.fillText(text, 256, 64);
+  label.texture.needsUpdate = true;
+}
+
+function roundRect(ctx, x, y, width, height, radius) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function updateNpcModeLabelTransform(runtimeNpc) {
+  const label = runtimeNpc.modeLabel;
+  if (!label) return;
+  label.group.visible = state.mode === "game" && runtimeNpc.character.root.visible;
+  if (!label.group.visible) return;
+  label.group.position.copy(runtimeNpc.character.root.position);
+  label.group.position.y += CHARACTER_HEIGHT + 0.55;
+  label.group.quaternion.copy(camera.quaternion);
+  updateNpcModeLabelText(label, getNpcBehaviorModeLabel(runtimeNpc.ai.mode));
+}
+
+function getCharacterForward(character) {
+  return new THREE.Vector3(0, 0, 1)
+    .applyAxisAngle(WORLD_UP, character.root.rotation.y)
+    .normalize();
+}
+
+function getYawToPosition(character, targetPosition) {
+  const direction = targetPosition.clone().sub(character.root.position);
+  direction.y = 0;
+  if (direction.lengthSq() <= 0.000001) return character.root.rotation.y;
+  direction.normalize();
+  return Math.atan2(direction.x, direction.z);
+}
+
+function shortestAngleDelta(from, to) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+function faceCharacterToward(character, targetPosition, delta, instant = false, turnSpeed = TURN_SPEED) {
+  const targetYaw = getYawToPosition(character, targetPosition);
+  if (instant) {
+    character.root.rotation.y = targetYaw;
+    return;
+  }
+  const yawDelta = shortestAngleDelta(character.root.rotation.y, targetYaw);
+  const maxStep = Math.max(0, asFiniteNumber(turnSpeed, TURN_SPEED)) * Math.max(delta, 0);
+  character.root.rotation.y += THREE.MathUtils.clamp(yawDelta, -maxStep, maxStep);
+}
+
+function getTargetFacingMetrics(character, targetPosition) {
+  if (!character || !targetPosition) return null;
+  const offset = targetPosition.clone().sub(character.root.position);
+  offset.y = 0;
+  const distance = offset.length();
+  if (distance <= 0.000001) {
+    return {
+      angleDeltaRadians: 0,
+      angleDeltaDegrees: 0,
+      absAngleDeltaDegrees: 0,
+      distance: 0,
+    };
+  }
+  const targetYaw = Math.atan2(offset.x, offset.z);
+  const angleDeltaRadians = shortestAngleDelta(character.root.rotation.y, targetYaw);
+  const angleDeltaDegrees = THREE.MathUtils.radToDeg(angleDeltaRadians);
+  return {
+    angleDeltaRadians,
+    angleDeltaDegrees,
+    absAngleDeltaDegrees: Math.abs(angleDeltaDegrees),
+    distance,
+  };
+}
+
+function isTargetInsideNpcVision(runtimeNpc, targetCharacter) {
+  const origin = runtimeNpc.character.root.position;
+  const targetPosition = targetCharacter.root.position;
+  const toTarget = targetPosition.clone().sub(origin);
+  toTarget.y = 0;
+  const distance = toTarget.length();
+  if (distance <= 0.000001 || distance > runtimeNpc.vision.distance) return false;
+  toTarget.normalize();
+  const forward = getCharacterForward(runtimeNpc.character);
+  const angle = forward.angleTo(toTarget);
+  return angle <= THREE.MathUtils.degToRad(runtimeNpc.vision.angle) / 2;
+}
+
+function getCharacterRuntimeEntity(character, fallback = {}) {
+  const runtime = character.runtime || {};
+  const attributes = { ...PLAYER_DEFAULT_ATTRIBUTES, ...(runtime.attributes || fallback.attributes || {}) };
+  return {
+    id: runtime.id || fallback.id || character.root.name,
+    name: runtime.name || attributes.name || fallback.name || character.root.name,
+    faction: runtime.faction ?? fallback.faction ?? 0,
+    attributes,
+    health: attributes.health,
+    stamina: attributes.stamina,
+    strength: attributes.strength,
+    agility: attributes.agility,
+    reaction: attributes.reaction,
+    position: character.root.position.toArray(),
+    runtimeCharacter: character,
+  };
+}
+
+function collectNpcVisibleTargets(runtimeNpc) {
+  if (!player || !player.root.visible || !isTargetInsideNpcVision(runtimeNpc, player)) return [];
+  const target = getCharacterRuntimeEntity(player, {
+    id: "player",
+    name: "Player",
+    faction: PLAYER_DEFAULT_FACTION,
+    attributes: PLAYER_DEFAULT_ATTRIBUTES,
+  });
+  target.distance = runtimeNpc.character.root.position.distanceTo(player.root.position);
+  target.attentionToMe = isTargetFacingCharacter(player, runtimeNpc.character);
+  return [target];
+}
+
+function isTargetFacingCharacter(sourceCharacter, targetCharacter) {
+  const toTarget = targetCharacter.root.position.clone().sub(sourceCharacter.root.position);
+  toTarget.y = 0;
+  if (toTarget.lengthSq() <= 0.000001) return false;
+  toTarget.normalize();
+  return getCharacterForward(sourceCharacter).dot(toTarget) > 0.55;
 }
 
 function toggleGlobalMotionMode() {
@@ -1021,10 +1441,24 @@ function getCombatAttackInput(code) {
   return COMBAT_ATTACK_INPUTS[code] ?? null;
 }
 
-function resolveCombatAttackActionName(direction) {
-  // Placeholder for character attack specialty selection. Future character stats,
-  // martial arts, and enemy-type logic can choose a different action here.
-  return COMBAT_ATTACK_ACTION_BY_DIRECTION[direction] ?? null;
+function resolveCombatAttackMove(character, direction, preferredMove = null) {
+  if (preferredMove?.actionName && character?.actions?.[preferredMove.actionName]) {
+    return preferredMove;
+  }
+  const availableMoves = getCharacterAvailableCombatMoves(character, direction);
+  return chooseWeightedCombatMove(availableMoves);
+}
+
+function getCharacterAvailableCombatMoves(character, direction) {
+  // Future character attributes, learned skills, martial arts, and enemy-type logic
+  // should filter or reorder this list here. For now every configured move is available.
+  return getCombatMovesForDirection(combatMoveManager, direction)
+    .filter((move) => character?.actions?.[move.actionName]);
+}
+
+function getRuntimeCombatMoveById(moveId) {
+  if (!moveId) return null;
+  return getAllCombatMoves(combatMoveManager).find((move) => move.id === moveId) || null;
 }
 
 function requestCombatAttack(direction) {
@@ -1036,22 +1470,32 @@ function requestCombatAttack(direction) {
 }
 
 function beginCombatAttack(direction) {
-  const actionName = resolveCombatAttackActionName(direction);
-  const action = player?.actions[actionName];
+  return beginCharacterCombatAttack(player, state.combatAttack, direction);
+}
+
+function beginCharacterCombatAttack(character, attackState, direction, preferredMove = null) {
+  const selectedMove = resolveCombatAttackMove(character, preferredMove?.triggerDirection || direction, preferredMove);
+  const attackDirection = selectedMove?.triggerDirection || direction;
+  const actionName = selectedMove?.actionName;
+  const action = character?.actions[actionName];
   if (!action) return false;
 
-  state.combatAttack.active = true;
-  state.combatAttack.activeDirection = direction;
-  state.combatAttack.activeActionName = actionName;
-  state.combatAttack.queuedDirection = null;
-  state.combatAttack.recoveryTimer = 0;
+  attackState.active = true;
+  attackState.activeDirection = attackDirection;
+  attackState.activeActionName = actionName;
+  attackState.activeActionFile = selectedMove.actionFile;
+  attackState.activeMoveId = selectedMove.id;
+  attackState.activeMoveName = selectedMove.name;
+  attackState.activeStrength = selectedMove.strength;
+  attackState.queuedDirection = null;
+  attackState.recoveryTimer = 0;
 
   configureAnimationAction(actionName, action);
-  if (player.currentAction === action) {
-    restartCharacterAction(player, actionName);
+  if (character.currentAction === action) {
+    restartCharacterAction(character, actionName);
   } else {
     action.reset();
-    player.desiredAction = action;
+    character.desiredAction = action;
   }
   return true;
 }
@@ -1068,23 +1512,39 @@ function restartCharacterAction(character, actionName) {
 }
 
 function finishCombatAttack() {
-  if (!state.combatAttack.active) return;
-  state.combatAttack.active = false;
-  state.combatAttack.activeDirection = null;
-  state.combatAttack.activeActionName = null;
-  state.combatAttack.queuedDirection = null;
-  state.combatAttack.recoveryTimer = COMBAT_ATTACK_RECOVERY_DURATION;
+  finishCharacterCombatAttack(state.combatAttack);
+}
+
+function finishCharacterCombatAttack(attackState) {
+  if (!attackState.active) return;
+  attackState.active = false;
+  attackState.activeDirection = null;
+  attackState.activeActionName = null;
+  attackState.activeActionFile = null;
+  attackState.activeMoveId = null;
+  attackState.activeMoveName = null;
+  attackState.activeStrength = 1;
+  attackState.queuedDirection = null;
+  attackState.recoveryTimer = COMBAT_ATTACK_RECOVERY_DURATION;
 }
 
 function cancelCombatAttack({ clearKeys = false } = {}) {
-  state.combatAttack.active = false;
-  state.combatAttack.activeDirection = null;
-  state.combatAttack.activeActionName = null;
-  state.combatAttack.queuedDirection = null;
-  state.combatAttack.recoveryTimer = 0;
+  cancelCharacterCombatAttack(state.combatAttack, { clearKeys });
+}
+
+function cancelCharacterCombatAttack(attackState, { clearKeys = false } = {}) {
+  attackState.active = false;
+  attackState.activeDirection = null;
+  attackState.activeActionName = null;
+  attackState.activeActionFile = null;
+  attackState.activeMoveId = null;
+  attackState.activeMoveName = null;
+  attackState.activeStrength = 1;
+  attackState.queuedDirection = null;
+  attackState.recoveryTimer = 0;
   if (clearKeys) {
     COMBAT_ATTACK_DIRECTIONS.forEach((direction) => {
-      state.combatAttack.keys[direction] = false;
+      attackState.keys[direction] = false;
     });
   }
 }
@@ -1098,7 +1558,7 @@ function getHeldCombatAttackDirection(preferredDirection = null) {
 }
 
 function isCombatAttackAction(actionName) {
-  return COMBAT_ATTACK_ACTION_NAMES.has(actionName);
+  return combatAttackActionNames.has(actionName);
 }
 
 function isCombatAttackComplete(actionName, action) {
@@ -1142,8 +1602,7 @@ function updateCombatAttackState() {
   return null;
 }
 
-function consumeCombatRecoveryControlScale(delta) {
-  const attack = state.combatAttack;
+function consumeCombatRecoveryControlScale(delta, attack = state.combatAttack) {
   if (attack.recoveryTimer <= 0) return 1;
   const scale = 1 - attack.recoveryTimer / COMBAT_ATTACK_RECOVERY_DURATION;
   attack.recoveryTimer = Math.max(0, attack.recoveryTimer - delta);
@@ -1357,6 +1816,7 @@ function update(time) {
 
   if (state.mode === "game") {
     updatePlayer(delta);
+    updateRuntimeNpcs(delta);
     cameraTarget.lerp(new THREE.Vector3(player.root.position.x, 1.05, player.root.position.z), 1 - Math.exp(-CAMERA_LERP * delta));
   }
 
@@ -1483,9 +1943,14 @@ function getDebugState() {
     combatAttackActive: state.combatAttack.active,
     combatAttackDirection: state.combatAttack.activeDirection,
     combatAttackAction: state.combatAttack.activeActionName,
+    combatAttackActionFile: state.combatAttack.activeActionFile,
+    combatAttackMoveId: state.combatAttack.activeMoveId,
+    combatAttackMoveName: state.combatAttack.activeMoveName,
+    combatAttackStrength: state.combatAttack.activeStrength,
     combatAttackQueuedDirection: state.combatAttack.queuedDirection,
     combatAttackKeys: { ...state.combatAttack.keys },
     combatAttackRecoveryTimer: state.combatAttack.recoveryTimer,
+    combatMoveActions: [...combatAttackActionNames],
     currentAction: player ? getActionName(player, player.currentAction) : null,
     desiredAction: debugActionName,
     visualYawOffsetDegrees: player
@@ -1515,6 +1980,30 @@ function getDebugState() {
         return [key, { min: box.min.toArray(), max: box.max.toArray() }];
       }))
       : null,
+    runtimeNpcs: runtimeNpcs.map((runtimeNpc) => ({
+      id: runtimeNpc.character.runtime?.id || runtimeNpc.data.id,
+      name: runtimeNpc.character.runtime?.name || runtimeNpc.data.attributes?.name,
+      mode: runtimeNpc.ai.mode,
+      candidateMode: runtimeNpc.ai.candidateMode,
+      pendingMode: runtimeNpc.ai.pendingMode,
+      modeElapsed: runtimeNpc.ai.modeElapsed,
+      pendingElapsed: runtimeNpc.ai.pendingElapsed,
+      behaviorTreeId: runtimeNpc.data.behaviorTreeId || null,
+      behaviorTreeLoaded: !!runtimeNpc.behaviorTree,
+      visibleTargetCount: runtimeNpc.ai.visibleTargets.length,
+      vision: { ...runtimeNpc.vision },
+      position: runtimeNpc.character.root.position.toArray(),
+      targetAngleDeltaDegrees: runtimeNpc.blackboard.targetAngleDeltaDegrees,
+      targetDistance: runtimeNpc.blackboard.targetDistance,
+      activeAttackNodeId: runtimeNpc.blackboard.activeAttackNodeId,
+      selectedAttackMoveId: runtimeNpc.blackboard.selectedAttackMoveId,
+      currentAction: getActionName(runtimeNpc.character, runtimeNpc.character.currentAction),
+      desiredAction: getActionName(runtimeNpc.character, runtimeNpc.character.desiredAction),
+      combatAttackActionFile: runtimeNpc.combatAttack.activeActionFile,
+      combatAttackMoveId: runtimeNpc.combatAttack.activeMoveId,
+      combatAttackMoveName: runtimeNpc.combatAttack.activeMoveName,
+      combatAttackStrength: runtimeNpc.combatAttack.activeStrength,
+    })),
     selectionChildren: selectionSet?.children.length ?? 0,
     rendererSize: renderer ? renderer.getDrawingBufferSize(new THREE.Vector2()).toArray() : null,
   };
@@ -1529,6 +2018,13 @@ function updatePlayer(delta) {
   }
 
   const controlScale = consumeCombatRecoveryControlScale(delta);
+  updateCharacterLocomotion(player, {
+    moving: state.keys.forward,
+    turn: (state.keys.left ? 1 : 0) - (state.keys.right ? 1 : 0),
+    combatMode: state.combatMode,
+    controlScale,
+  }, delta);
+  return;
   const moving = state.keys.forward;
   const turningLeft = state.keys.left && !state.keys.right;
   const turningRight = state.keys.right && !state.keys.left;
@@ -1607,6 +2103,592 @@ function updatePlayer(delta) {
   if (canMoveTo(next)) {
     player.root.position.copy(next);
   }
+}
+
+function getCharacterLocomotionActions(character, combatMode) {
+  return combatMode
+    ? {
+        idle: character.actions.combatIdle,
+        walk: character.actions.combatWalk,
+        turnLeft: character.actions.combatTurnLeft,
+        turnRight: character.actions.combatTurnRight,
+      }
+    : {
+        idle: character.actions.idle,
+        walk: character.actions.walk,
+        turnLeft: character.actions.turnLeft,
+        turnRight: character.actions.turnRight,
+      };
+}
+
+function updateCharacterLocomotion(character, intent, delta) {
+  const controlScale = intent.controlScale ?? 1;
+  const moving = !!intent.moving;
+  const turn = Number(intent.turn) || 0;
+  const turningLeft = turn > 0.001;
+  const turningRight = turn < -0.001;
+  const locomotion = getCharacterLocomotionActions(character, !!intent.combatMode);
+  const nextAction = moving
+    ? locomotion.walk
+    : turningLeft
+      ? locomotion.turnLeft
+      : turningRight
+        ? locomotion.turnRight
+        : locomotion.idle;
+  const nextActionName = getActionName(character, nextAction) || "idle";
+  const config = motionConfig[nextActionName] || { motionMode: "InPlace" };
+  const moveSpeed = Number.isFinite(Number(intent.moveSpeed))
+    ? Number(intent.moveSpeed)
+    : getConfiguredCodeMoveSpeed(nextActionName);
+  const turnSpeed = Number.isFinite(Number(intent.turnSpeed))
+    ? Number(intent.turnSpeed)
+    : TURN_SPEED;
+  const isTurningAction = nextActionName === "turnLeft"
+    || nextActionName === "turnRight"
+    || nextActionName === "combatTurnLeft"
+    || nextActionName === "combatTurnRight";
+  const useRootRotation = isTurningAction && config.motionMode === "RootMotion";
+
+  if (!useRootRotation && !intent.rotationApplied) {
+    character.root.rotation.y += turn * turnSpeed * controlScale * delta;
+  }
+
+  character.desiredAction = nextAction;
+
+  if (character.actions.walk && nextAction !== character.actions.walk) character.actions.walk.timeScale = 1.0;
+  if (character.actions.combatWalk && nextAction !== character.actions.combatWalk) character.actions.combatWalk.timeScale = 1.0;
+  if (isTurningAction) nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+  if (!moving) return;
+
+  const effectiveMoveSpeed = moveSpeed * controlScale;
+  if (config.motionMode === "RootMotion") {
+    if (hasConfiguredCodeMoveSpeed(nextActionName)) {
+      const naturalSpeed = computeAnimNaturalSpeed(nextActionName, character);
+      if (naturalSpeed > 0.1) {
+        const targetScale = moveSpeed / naturalSpeed;
+        nextAction.timeScale = THREE.MathUtils.clamp(targetScale * controlScale, 0, 3.0);
+      } else {
+        nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+      }
+    }
+    return;
+  }
+
+  const naturalSpeed = computeAnimNaturalSpeed(nextActionName, character);
+  if (naturalSpeed > 0.1) {
+    const targetScale = effectiveMoveSpeed / naturalSpeed;
+    nextAction.timeScale = THREE.MathUtils.clamp(targetScale, 0, 3.0);
+  } else {
+    nextAction.timeScale = controlScale < 1 ? controlScale : 1.0;
+  }
+
+  const forward = getConfiguredCodeMoveDirection(nextActionName, character);
+  const next = character.root.position.clone().addScaledVector(forward, effectiveMoveSpeed * delta);
+  if (canMoveTo(next)) {
+    character.root.position.copy(next);
+  }
+}
+
+function updateRuntimeNpcs(delta) {
+  runtimeNpcs.forEach((runtimeNpc) => {
+    if (!runtimeNpc.character.active || !runtimeNpc.character.root.visible) return;
+    refreshNpcVisionHelper(runtimeNpc);
+    updateRuntimeNpcBrain(runtimeNpc, delta);
+    executeRuntimeNpcBehavior(runtimeNpc, delta);
+    updateNpcModeLabelTransform(runtimeNpc);
+  });
+}
+
+function updateRuntimeNpcBrain(runtimeNpc, delta) {
+  if (!runtimeNpc.behaviorTree) return;
+  runtimeNpc.ai.modeElapsed = (runtimeNpc.ai.modeElapsed || 0) + delta;
+  runtimeNpc.ai.tickTimer -= delta;
+  if (runtimeNpc.ai.tickTimer <= 0 || !runtimeNpc.ai.result) {
+    const brain = runtimeNpc.behaviorTree.brain || {};
+    const tickInterval = Math.max(0.05, Number(brain.tickIntervalMs || 300) / 1000);
+    runtimeNpc.ai.tickTimer = tickInterval;
+    runtimeNpc.blackboard.randomPosition = getOrCreateNpcRandomPosition(runtimeNpc);
+    const visibleTargets = collectNpcVisibleTargets(runtimeNpc);
+    const context = {
+      self: getCharacterRuntimeEntity(runtimeNpc.character, {
+        id: runtimeNpc.data.id,
+        name: runtimeNpc.data.attributes?.name,
+        faction: runtimeNpc.data.faction,
+        attributes: runtimeNpc.data.attributes,
+      }),
+      visibleTargets,
+      blackboard: {
+        randomPosition: runtimeNpc.blackboard.randomPosition,
+        lookTarget: runtimeNpc.blackboard.lookTarget,
+        lockedTarget: runtimeNpc.blackboard.lockedTarget,
+        targetAngleDeltaDegrees: runtimeNpc.blackboard.targetAngleDeltaDegrees,
+        targetDistance: runtimeNpc.blackboard.targetDistance,
+      },
+    };
+    const result = evaluateNpcBrain(runtimeNpc.behaviorTree, context);
+    runtimeNpc.ai.result = result;
+    runtimeNpc.ai.candidateMode = result.mode || brain.fallbackMode || "default";
+    runtimeNpc.ai.visibleTargets = visibleTargets;
+    if (result.blackboard.lookTarget) {
+      runtimeNpc.blackboard.lookTarget = result.blackboard.lookTarget;
+    }
+    if (result.blackboard.lockedTarget) {
+      runtimeNpc.blackboard.lockedTarget = result.blackboard.lockedTarget;
+    } else if (result.blackboard.lookTarget) {
+      runtimeNpc.blackboard.lockedTarget = result.blackboard.lookTarget;
+    }
+  }
+  updateRuntimeNpcModeController(runtimeNpc, delta);
+}
+
+function updateRuntimeNpcModeController(runtimeNpc, delta) {
+  const ai = runtimeNpc.ai;
+  const currentMode = ai.mode || runtimeNpc.behaviorTree?.brain?.fallbackMode || "default";
+  const candidateMode = ai.candidateMode || currentMode;
+  ai.noVisibleTargetElapsed = ai.visibleTargets.length ? 0 : (ai.noVisibleTargetElapsed || 0) + delta;
+
+  if (candidateMode === currentMode) {
+    ai.pendingMode = null;
+    ai.pendingElapsed = 0;
+    return;
+  }
+
+  const config = getRuntimeModeSwitchConfig(runtimeNpc.behaviorTree, currentMode);
+  const minSatisfied = ai.modeElapsed * 1000 >= config.minDurationMs;
+  const lostTargetSatisfied = candidateMode !== "default"
+    || ai.visibleTargets.length > 0
+    || ai.noVisibleTargetElapsed * 1000 >= config.lostTargetGraceMs;
+  const canInterrupt = config.interruptibleBy.includes(candidateMode);
+
+  if (canInterrupt) {
+    commitRuntimeNpcMode(runtimeNpc, candidateMode);
+    return;
+  }
+
+  if (!minSatisfied || !lostTargetSatisfied) {
+    ai.pendingMode = candidateMode;
+    ai.pendingElapsed = 0;
+    return;
+  }
+
+  if (ai.pendingMode !== candidateMode) {
+    ai.pendingMode = candidateMode;
+    ai.pendingElapsed = 0;
+  } else {
+    ai.pendingElapsed += delta;
+  }
+
+  if (ai.pendingElapsed * 1000 >= config.stableDurationMs) {
+    commitRuntimeNpcMode(runtimeNpc, candidateMode);
+  }
+}
+
+function commitRuntimeNpcMode(runtimeNpc, mode) {
+  runtimeNpc.ai.mode = mode;
+  runtimeNpc.ai.modeElapsed = 0;
+  runtimeNpc.ai.pendingMode = null;
+  runtimeNpc.ai.pendingElapsed = 0;
+  if (mode !== "attack") {
+    runtimeNpc.blackboard.lockedTarget = null;
+    runtimeNpc.blackboard.targetAngleDeltaDegrees = null;
+    runtimeNpc.blackboard.targetDistance = null;
+    runtimeNpc.blackboard.activeAttackNodeId = null;
+    runtimeNpc.blackboard.selectedAttackMoveId = null;
+    cancelCharacterCombatAttack(runtimeNpc.combatAttack);
+  }
+  if (mode === "default") {
+    runtimeNpc.blackboard.lookTarget = null;
+  }
+}
+
+function getRuntimeModeSwitchConfig(behaviorTree, mode) {
+  const defaults = DEFAULT_MODE_SWITCH_CONFIGS[mode] || DEFAULT_MODE_SWITCH_CONFIGS.custom;
+  const node = behaviorTree?.behaviorModes?.[mode]?.nodes?.find((item) => item.type === "modeSwitch");
+  const config = node?.params?.modeSwitch || {};
+  const interruptibleBy = Array.isArray(config.interruptibleBy)
+    ? config.interruptibleBy
+    : defaults.interruptibleBy;
+  return {
+    minDurationMs: asFiniteNumber(config.minDurationMs, defaults.minDurationMs),
+    stableDurationMs: asFiniteNumber(config.stableDurationMs, defaults.stableDurationMs),
+    lostTargetGraceMs: asFiniteNumber(config.lostTargetGraceMs, defaults.lostTargetGraceMs),
+    interruptibleBy: interruptibleBy.filter(Boolean),
+  };
+}
+
+function asFiniteNumber(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function executeRuntimeNpcBehavior(runtimeNpc, delta) {
+  const character = runtimeNpc.character;
+  const mode = runtimeNpc.ai.mode || runtimeNpc.behaviorTree?.brain?.fallbackMode || "default";
+  const result = runtimeNpc.ai.result;
+  const nodes = getOrderedRuntimeBehaviorNodes(runtimeNpc.behaviorTree, mode);
+  const command = {
+    combatMode: mode === "attack",
+    moveTarget: null,
+    lookTarget: null,
+    attackTarget: null,
+    lockNode: null,
+    lockTarget: null,
+    lockTurnSpeed: DEFAULT_LOCK_TURN_SPEED,
+    attackNodes: [],
+    selectedAttackNode: null,
+    turn: 0,
+    rotationApplied: false,
+    moveSpeed: mode === "attack" ? runtimeNpc.moveSpeed.combat : runtimeNpc.moveSpeed.normal,
+  };
+
+  if (!nodes.length) {
+    applyFallbackNpcCommand(runtimeNpc, command, mode);
+  } else {
+    nodes.forEach((node) => applyNpcBehaviorNode(runtimeNpc, result, command, node));
+  }
+
+  resolveNpcLockedAttack(runtimeNpc, command, mode, delta);
+
+  const attackTargetPosition = getRuntimePosition(command.attackTarget);
+  if (attackTargetPosition) {
+    command.lookTarget = attackTargetPosition;
+  }
+  const lookTargetPosition = getRuntimePosition(command.lookTarget);
+  if (lookTargetPosition && !command.rotationApplied) {
+    faceCharacterToward(character, lookTargetPosition, delta);
+    updateNpcTargetBlackboardMetrics(runtimeNpc, lookTargetPosition);
+  }
+
+  const attackDistance = attackTargetPosition
+    ? character.root.position.distanceTo(attackTargetPosition)
+    : Infinity;
+  const shouldAttack = !!command.selectedAttackNode || (!!attackTargetPosition && attackDistance <= NPC_ATTACK_RANGE);
+  const attackActionName = updateNpcCombatAttack(runtimeNpc, shouldAttack, delta, command.selectedAttackNode);
+  if (attackActionName) {
+    if (character.actions.walk) character.actions.walk.timeScale = 1.0;
+    if (character.actions.combatWalk) character.actions.combatWalk.timeScale = 1.0;
+    return;
+  }
+
+  if (!command.lockNode && attackTargetPosition && attackDistance > NPC_ATTACK_RANGE) {
+    command.moveTarget = attackTargetPosition;
+    command.combatMode = true;
+    command.moveSpeed = runtimeNpc.moveSpeed.combat;
+  }
+
+  const moveTargetPosition = getRuntimePosition(command.moveTarget);
+  const moving = !!moveTargetPosition && character.root.position.distanceTo(moveTargetPosition) > NPC_RANDOM_REACH_DISTANCE;
+  if (moving) {
+    if (!command.rotationApplied) {
+      faceCharacterToward(character, moveTargetPosition, delta);
+    }
+  } else if (command.moveTarget === runtimeNpc.blackboard.randomPosition) {
+    runtimeNpc.blackboard.randomPosition = null;
+  }
+
+  const controlScale = consumeCombatRecoveryControlScale(delta, runtimeNpc.combatAttack);
+  updateCharacterLocomotion(character, {
+    moving,
+    turn: command.turn,
+    combatMode: command.combatMode,
+    controlScale,
+    moveSpeed: command.moveSpeed,
+    turnSpeed: command.lockTurnSpeed,
+    rotationApplied: command.rotationApplied,
+  }, delta);
+}
+
+function resolveNpcLockedAttack(runtimeNpc, command, mode, delta) {
+  if (!command.lockNode) {
+    const attackTargetPosition = getRuntimePosition(command.attackTarget);
+    command.selectedAttackNode = selectFirstSatisfiedAttackNode(
+      runtimeNpc,
+      command.attackNodes,
+      attackTargetPosition,
+    );
+    if (command.selectedAttackNode) {
+      command.attackTarget = resolveRuntimeBinding(
+        runtimeNpc,
+        runtimeNpc.ai.result,
+        command.selectedAttackNode.params?.bindings?.targetPos || "lockedTarget",
+      ) || command.attackTarget;
+    }
+    runtimeNpc.blackboard.activeAttackNodeId = command.selectedAttackNode?.id || null;
+    runtimeNpc.blackboard.selectedAttackMoveId = command.selectedAttackNode?.params?.attack?.combatMoveId || null;
+    return;
+  }
+
+  const lockTargetPosition = getRuntimePosition(command.lockTarget);
+  if (!lockTargetPosition) {
+    clearNpcTargetBlackboardMetrics(runtimeNpc);
+    command.attackTarget = null;
+    return;
+  }
+
+  const before = getTargetFacingMetrics(runtimeNpc.character, lockTargetPosition);
+  const turn = Math.abs(before?.angleDeltaRadians || 0) > THREE.MathUtils.degToRad(0.5)
+    ? Math.sign(before.angleDeltaRadians)
+    : 0;
+  faceCharacterToward(runtimeNpc.character, lockTargetPosition, delta, false, command.lockTurnSpeed);
+  const metrics = updateNpcTargetBlackboardMetrics(runtimeNpc, lockTargetPosition);
+  command.turn = turn;
+  command.rotationApplied = true;
+  command.combatMode = true;
+  command.lookTarget = command.lockTarget;
+
+  const attackNodes = getCandidateAttackNodesAfterLock(runtimeNpc.behaviorTree, mode, command.lockNode, command.attackNodes);
+  const selectedAttackNode = selectFirstSatisfiedAttackNode(runtimeNpc, attackNodes, lockTargetPosition, metrics);
+  command.selectedAttackNode = selectedAttackNode;
+  command.attackTarget = selectedAttackNode ? command.lockTarget : null;
+  if (!selectedAttackNode && shouldNpcChaseLockedTarget(metrics, attackNodes)) {
+    command.moveTarget = command.lockTarget;
+    command.moveSpeed = runtimeNpc.moveSpeed.combat;
+  }
+  runtimeNpc.blackboard.activeAttackNodeId = selectedAttackNode?.id || null;
+  runtimeNpc.blackboard.selectedAttackMoveId = selectedAttackNode?.params?.attack?.combatMoveId || null;
+}
+
+function selectFirstSatisfiedAttackNode(runtimeNpc, attackNodes, targetPosition, knownMetrics = null) {
+  if (!targetPosition || !attackNodes?.length) return null;
+  const metrics = knownMetrics || updateNpcTargetBlackboardMetrics(runtimeNpc, targetPosition);
+  if (!metrics) return null;
+  return attackNodes.find((node) => {
+    const config = getRuntimeAttackConfig(node);
+    return metrics.absAngleDeltaDegrees <= config.attackAngleDegrees
+      && metrics.distance <= config.attackDistance;
+  }) || null;
+}
+
+function getCandidateAttackNodesAfterLock(behaviorTree, mode, lockNode, fallbackAttackNodes = []) {
+  const stateForMode = getRuntimeBehaviorState(behaviorTree, mode);
+  if (!stateForMode || !lockNode) return fallbackAttackNodes;
+  const nodesById = new Map(stateForMode.nodes.map((node) => [node.id, node]));
+  const directAttackNodes = (stateForMode.transitions || [])
+    .filter((transition) => transition.from === lockNode.id)
+    .map((transition) => nodesById.get(transition.to))
+    .filter((node) => node?.type === "attack");
+  const seen = new Set();
+  return [...directAttackNodes, ...fallbackAttackNodes].filter((node) => {
+    if (!node || seen.has(node.id)) return false;
+    seen.add(node.id);
+    return true;
+  });
+}
+
+function shouldNpcChaseLockedTarget(metrics, attackNodes) {
+  if (!metrics) return false;
+  const ranges = (attackNodes || [])
+    .map((node) => getRuntimeAttackConfig(node).attackDistance)
+    .filter((distance) => Number.isFinite(distance) && distance >= 0);
+  const maxAttackDistance = ranges.length ? Math.max(...ranges) : DEFAULT_ATTACK_DISTANCE;
+  return metrics.distance > maxAttackDistance;
+}
+
+function updateNpcTargetBlackboardMetrics(runtimeNpc, targetPosition) {
+  const metrics = getTargetFacingMetrics(runtimeNpc.character, targetPosition);
+  if (!metrics) {
+    clearNpcTargetBlackboardMetrics(runtimeNpc);
+    return null;
+  }
+  runtimeNpc.blackboard.targetAngleDeltaDegrees = metrics.angleDeltaDegrees;
+  runtimeNpc.blackboard.targetDistance = metrics.distance;
+  return metrics;
+}
+
+function clearNpcTargetBlackboardMetrics(runtimeNpc) {
+  runtimeNpc.blackboard.targetAngleDeltaDegrees = null;
+  runtimeNpc.blackboard.targetDistance = null;
+  runtimeNpc.blackboard.activeAttackNodeId = null;
+  runtimeNpc.blackboard.selectedAttackMoveId = null;
+}
+
+function getRuntimeLockTargetConfig(node) {
+  const params = node?.params?.lockTarget || {};
+  return {
+    turnSpeed: Math.max(0.01, asFiniteNumber(params.turnSpeed, DEFAULT_LOCK_TURN_SPEED)),
+  };
+}
+
+function getRuntimeAttackConfig(node) {
+  const params = node?.params?.attack || {};
+  return {
+    attackAngleDegrees: Math.max(0, asFiniteNumber(params.attackAngleDegrees, DEFAULT_ATTACK_ARC_DEGREES)),
+    attackDistance: Math.max(0, asFiniteNumber(params.attackDistance, DEFAULT_ATTACK_DISTANCE)),
+    combatMoveId: String(params.combatMoveId || ""),
+  };
+}
+
+function applyFallbackNpcCommand(runtimeNpc, command, mode) {
+  if (mode === "attack") {
+    command.attackTarget = runtimeNpc.blackboard.lockedTarget || runtimeNpc.blackboard.lookTarget;
+  } else if (mode === "flee") {
+    command.moveTarget = runtimeNpc.ai.result?.blackboard?.fleePosition || runtimeNpc.blackboard.randomPosition;
+    command.moveSpeed = runtimeNpc.moveSpeed.normal * 1.25;
+  } else {
+    command.moveTarget = runtimeNpc.blackboard.randomPosition;
+  }
+}
+
+function applyNpcBehaviorNode(runtimeNpc, brainResult, command, node) {
+  const type = node.type;
+  const bindings = node.params?.bindings || {};
+  if (type === "lookAt") {
+    command.lookTarget = resolveRuntimeBinding(runtimeNpc, brainResult, bindings.targetPos || "highestDanger");
+  } else if (type === "lockTarget") {
+    const target = resolveRuntimeBinding(runtimeNpc, brainResult, bindings.targetPos || "lookTarget");
+    const lockedTarget = target || runtimeNpc.blackboard.lockedTarget;
+    runtimeNpc.blackboard.lockedTarget = lockedTarget;
+    command.lockNode = node;
+    command.lockTarget = lockedTarget;
+    command.lockTurnSpeed = getRuntimeLockTargetConfig(node).turnSpeed;
+    command.lookTarget = lockedTarget;
+    command.combatMode = true;
+  } else if (type === "attack") {
+    command.combatMode = true;
+    command.attackNodes.push(node);
+    if (!command.attackTarget) {
+      command.attackTarget = resolveRuntimeBinding(runtimeNpc, brainResult, bindings.targetPos || "lockedTarget");
+    }
+    command.moveSpeed = runtimeNpc.moveSpeed.combat;
+  } else if (type === "run") {
+    command.moveTarget = resolveRuntimeBinding(runtimeNpc, brainResult, bindings.destinationPos || "fleeFromHighestDanger");
+    command.moveSpeed = runtimeNpc.moveSpeed.normal * 1.25;
+  } else if (type === "walk" || type === "move") {
+    command.moveTarget = resolveRuntimeBinding(runtimeNpc, brainResult, bindings.destinationPos || "randomPosition");
+  }
+}
+
+function getRuntimeBehaviorState(behaviorTree, mode) {
+  return behaviorTree?.behaviorModes?.[mode]
+    || behaviorTree?.behaviorModes?.default
+    || null;
+}
+
+function getOrderedRuntimeBehaviorNodes(behaviorTree, mode) {
+  const stateForMode = getRuntimeBehaviorState(behaviorTree, mode);
+  if (!stateForMode?.nodes?.length) return [];
+
+  const nodesById = new Map(stateForMode.nodes.map((node) => [node.id, node]));
+  const transitions = Array.isArray(stateForMode.transitions) ? stateForMode.transitions : [];
+  const ordered = [];
+  const visited = new Set();
+  let current = transitions.find((transition) => transition.from === "entry")?.to;
+
+  while (current && nodesById.has(current) && !visited.has(current)) {
+    visited.add(current);
+    ordered.push(nodesById.get(current));
+    current = transitions.find((transition) => transition.from === current)?.to;
+  }
+
+  if (ordered.length) return ordered;
+  return stateForMode.nodes.slice().sort((a, b) => (a.x || 0) - (b.x || 0));
+}
+
+function resolveRuntimeBinding(runtimeNpc, brainResult, selector) {
+  switch (selector) {
+    case "highestDanger":
+      return brainResult?.blackboard?.highestDangerTarget || null;
+    case "weakestDanger":
+      return brainResult?.blackboard?.weakestDangerTarget || null;
+    case "lookTarget":
+      return runtimeNpc.blackboard.lookTarget || brainResult?.blackboard?.lookTarget || null;
+    case "lockedTarget":
+      return runtimeNpc.blackboard.lockedTarget || brainResult?.blackboard?.lockedTarget || null;
+    case "randomPosition":
+      runtimeNpc.blackboard.randomPosition = getOrCreateNpcRandomPosition(runtimeNpc);
+      return runtimeNpc.blackboard.randomPosition;
+    case "fleeFromHighestDanger":
+      return brainResult?.blackboard?.fleePosition || runtimeNpc.blackboard.randomPosition;
+    case "selfPosition":
+      return runtimeNpc.character.root.position;
+    default:
+      return null;
+  }
+}
+
+function getRuntimePosition(value) {
+  if (!value) return null;
+  if (value.isVector3) return value;
+  if (value.runtimeCharacter?.root) return value.runtimeCharacter.root.position;
+  if (Array.isArray(value) && value.length >= 3) {
+    return new THREE.Vector3(Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0);
+  }
+  if (Array.isArray(value.position) && value.position.length >= 3) {
+    return new THREE.Vector3(Number(value.position[0]) || 0, Number(value.position[1]) || 0, Number(value.position[2]) || 0);
+  }
+  if (value.position?.isVector3) return value.position;
+  if (value.position && typeof value.position === "object") {
+    return new THREE.Vector3(Number(value.position.x) || 0, Number(value.position.y) || 0, Number(value.position.z) || 0);
+  }
+  return null;
+}
+
+function getOrCreateNpcRandomPosition(runtimeNpc) {
+  const current = getRuntimePosition(runtimeNpc.blackboard.randomPosition);
+  if (current && runtimeNpc.character.root.position.distanceTo(current) > NPC_RANDOM_REACH_DISTANCE) {
+    return current.toArray();
+  }
+
+  const radius = Number(runtimeNpc.behaviorTree?.brain?.blackboardSources?.randomPosition?.radius) || 6;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = radius * (0.35 + Math.random() * 0.65);
+    const position = runtimeNpc.character.root.position.clone().add(new THREE.Vector3(
+      Math.sin(angle) * distance,
+      0,
+      Math.cos(angle) * distance,
+    ));
+    position.x = THREE.MathUtils.clamp(position.x, -WORLD_SIZE * TILE_SIZE + 1, WORLD_SIZE * TILE_SIZE - 1);
+    position.z = THREE.MathUtils.clamp(position.z, -WORLD_SIZE * TILE_SIZE + 1, WORLD_SIZE * TILE_SIZE - 1);
+    if (canMoveTo(position)) return position.toArray();
+  }
+
+  return runtimeNpc.character.root.position.toArray();
+}
+
+function updateNpcCombatAttack(runtimeNpc, shouldAttack, delta, attackNode = null) {
+  const attack = runtimeNpc.combatAttack;
+  attack.aiCooldown = Math.max(0, (attack.aiCooldown || 0) - delta);
+  if (!shouldAttack && !attack.active) {
+    cancelCharacterCombatAttack(attack);
+    return null;
+  }
+
+  if (!attack.active) {
+    if (attack.aiCooldown <= 0) {
+      const attackConfig = getRuntimeAttackConfig(attackNode);
+      const preferredMove = getRuntimeCombatMoveById(attackConfig.combatMoveId);
+      beginCharacterCombatAttack(
+        runtimeNpc.character,
+        attack,
+        preferredMove?.triggerDirection || resolveNpcCombatAttackDirection(runtimeNpc),
+        preferredMove,
+      );
+    }
+    return attack.activeActionName;
+  }
+
+  const actionName = attack.activeActionName;
+  const action = runtimeNpc.character.actions[actionName];
+  if (!action) {
+    cancelCharacterCombatAttack(attack);
+    return null;
+  }
+
+  runtimeNpc.character.desiredAction = action;
+  if (runtimeNpc.character.currentAction !== action || !isCombatAttackComplete(actionName, action)) {
+    return actionName;
+  }
+
+  finishCharacterCombatAttack(attack);
+  attack.aiCooldown = NPC_ATTACK_COOLDOWN;
+  return null;
+}
+
+function resolveNpcCombatAttackDirection(runtimeNpc) {
+  // NPCs currently face their attack target before striking, so their default
+  // attack intent is forward. Future AI nodes can return left/right intents here.
+  return runtimeNpc?.blackboard?.attackDirection || "forward";
 }
 
 function canMoveTo(position) {

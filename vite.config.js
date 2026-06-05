@@ -10,6 +10,7 @@ const scenesPath = path.resolve(projectRoot, "public/assets/scenes");
 const npcsPath = path.resolve(projectRoot, "public/assets/npcs");
 const behaviorTreesPath = path.resolve(projectRoot, "public/assets/behavior-trees");
 const aiProfilesPath = path.resolve(projectRoot, "public/assets/ai-profiles");
+const combatMoveManagerPath = path.resolve(projectRoot, "public/assets/combat/move_manager.json");
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -66,6 +67,43 @@ function motionConfigApi() {
             }
 
             await fs.writeFile(motionConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, PUT, POST");
+          res.end();
+        } catch (error) {
+          sendJson(res, 500, { error: error.message });
+        }
+      });
+    },
+  };
+}
+
+function combatMoveManagerApi() {
+  return {
+    name: "combat-move-manager-api",
+    configureServer(server) {
+      server.middlewares.use("/api/combat-move-manager", async (req, res) => {
+        try {
+          if (req.method === "GET") {
+            const file = await fs.readFile(combatMoveManagerPath, "utf8");
+            sendJson(res, 200, JSON.parse(file));
+            return;
+          }
+
+          if (req.method === "PUT" || req.method === "POST") {
+            const body = await readRequestBody(req);
+            const payload = JSON.parse(body || "{}");
+            if (!payload || Array.isArray(payload) || typeof payload !== "object") {
+              sendJson(res, 400, { error: "Move manager data must be a JSON object." });
+              return;
+            }
+
+            await fs.mkdir(path.dirname(combatMoveManagerPath), { recursive: true });
+            await fs.writeFile(combatMoveManagerPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
             sendJson(res, 200, { ok: true });
             return;
           }
@@ -472,7 +510,7 @@ function npcApi() {
 
 export default defineConfig({
   base: "./",
-  plugins: [motionConfigApi(), scenesApi(), npcApi(), behaviorTreesApi(), aiProfilesApi()],
+  plugins: [motionConfigApi(), combatMoveManagerApi(), scenesApi(), npcApi(), behaviorTreesApi(), aiProfilesApi()],
   build: {
     rollupOptions: {
       input: {
@@ -481,6 +519,7 @@ export default defineConfig({
         sceneEditor: path.resolve(projectRoot, "scene-editor.html"),
         npcEditor: path.resolve(projectRoot, "npc-editor.html"),
         behaviorEditor: path.resolve(projectRoot, "behavior-editor.html"),
+        moveManager: path.resolve(projectRoot, "move-manager.html"),
       },
     },
   },
