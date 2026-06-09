@@ -6,6 +6,8 @@ import { defineConfig } from "vite";
 const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 const animationAssetsPath = path.resolve(projectRoot, "public/assets/animations");
 const motionConfigPath = path.resolve(animationAssetsPath, "motion_config.json");
+const modelAssetsPath = path.resolve(projectRoot, "public/assets/models");
+const modelConfigPath = path.resolve(modelAssetsPath, "model_config.json");
 const scenesPath = path.resolve(projectRoot, "public/assets/scenes");
 const npcsPath = path.resolve(projectRoot, "public/assets/npcs");
 const behaviorTreesPath = path.resolve(projectRoot, "public/assets/behavior-trees");
@@ -67,6 +69,45 @@ function motionConfigApi() {
             }
 
             await fs.writeFile(motionConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+            sendJson(res, 200, { ok: true });
+            return;
+          }
+
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, PUT, POST");
+          res.end();
+        } catch (error) {
+          sendJson(res, 500, { error: error.message });
+        }
+      });
+    },
+  };
+}
+
+function modelConfigApi() {
+  return {
+    name: "model-config-api",
+    configureServer(server) {
+      server.middlewares.use("/api/model-config", async (req, res) => {
+        try {
+          if (req.method === "GET") {
+            const file = await fs.readFile(modelConfigPath, "utf8");
+            sendJson(res, 200, JSON.parse(file));
+            return;
+          }
+
+          if (req.method === "PUT" || req.method === "POST") {
+            const body = await readRequestBody(req);
+            const payload = JSON.parse(body || "{}");
+            const config = payload.config ?? payload;
+
+            if (!config || Array.isArray(config) || typeof config !== "object") {
+              sendJson(res, 400, { error: "Model config must be a JSON object." });
+              return;
+            }
+
+            await fs.mkdir(modelAssetsPath, { recursive: true });
+            await fs.writeFile(modelConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
             sendJson(res, 200, { ok: true });
             return;
           }
@@ -510,12 +551,13 @@ function npcApi() {
 
 export default defineConfig({
   base: "./",
-  plugins: [motionConfigApi(), combatMoveManagerApi(), scenesApi(), npcApi(), behaviorTreesApi(), aiProfilesApi()],
+  plugins: [motionConfigApi(), modelConfigApi(), combatMoveManagerApi(), scenesApi(), npcApi(), behaviorTreesApi(), aiProfilesApi()],
   build: {
     rollupOptions: {
       input: {
         main: path.resolve(projectRoot, "index.html"),
         motionEditor: path.resolve(projectRoot, "motion-editor.html"),
+        modelEditor: path.resolve(projectRoot, "model-editor.html"),
         sceneEditor: path.resolve(projectRoot, "scene-editor.html"),
         npcEditor: path.resolve(projectRoot, "npc-editor.html"),
         behaviorEditor: path.resolve(projectRoot, "behavior-editor.html"),

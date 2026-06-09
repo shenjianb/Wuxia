@@ -3,7 +3,7 @@
   "name": "np1",
   "version": 2,
   "created": "2026-06-02T13:38:08.596Z",
-  "modified": "2026-06-05T05:20:02.668Z",
+  "modified": "2026-06-05T08:23:52.144Z",
   "modeDefinitions": [
     {
       "key": "default",
@@ -195,7 +195,7 @@
               "targetPos": "lookTarget"
             },
             "lockTarget": {
-              "turnSpeed": 0.5
+              "turnSpeed": 1
             }
           },
           "x": 470,
@@ -230,7 +230,7 @@
             "modeSwitch": {
               "minDurationMs": 1600,
               "stableDurationMs": 900,
-              "lostTargetGraceMs": 1500,
+              "lostTargetGraceMs": 6400,
               "interruptibleBy": [
                 "flee"
               ]
@@ -478,20 +478,6 @@
           }
         ],
         "outputMode": "attack"
-      },
-      {
-        "id": "decision-mpwrewsm-15",
-        "name": "新决策规则",
-        "enabled": false,
-        "priority": 50,
-        "conditions": [
-          {
-            "metric": "dangerRatio",
-            "operator": "gte",
-            "value": 0.5
-          }
-        ],
-        "outputMode": "alert"
       }
     ],
     "blackboardSources": {
@@ -658,7 +644,7 @@
             "targetPos": "lookTarget"
           },
           "lockTarget": {
-            "turnSpeed": 0.5
+            "turnSpeed": 1
           }
         },
         "x": 470,
@@ -693,7 +679,7 @@
           "modeSwitch": {
             "minDurationMs": 1600,
             "stableDurationMs": 900,
-            "lostTargetGraceMs": 1500,
+            "lostTargetGraceMs": 6400,
             "interruptibleBy": [
               "flee"
             ]
