@@ -22,6 +22,8 @@ export const DEFAULT_COMBAT_MOVE_MANAGER = {
           actionName: "combat_Att_F_Hand_1",
           weight: 60,
           strength: 1,
+          hitWindows: [],
+          impact: createDefaultMoveImpact(),
         },
         {
           id: "move-forward-hand-1-ro",
@@ -31,6 +33,8 @@ export const DEFAULT_COMBAT_MOVE_MANAGER = {
           actionName: "combat_Att_F_Hand_1_Ro",
           weight: 25,
           strength: 1.15,
+          hitWindows: [],
+          impact: createDefaultMoveImpact(),
         },
         {
           id: "move-forward-hand-2",
@@ -40,6 +44,8 @@ export const DEFAULT_COMBAT_MOVE_MANAGER = {
           actionName: "combat_Att_F_Hand_2",
           weight: 15,
           strength: 1.3,
+          hitWindows: [],
+          impact: createDefaultMoveImpact(),
         },
       ],
     },
@@ -56,6 +62,8 @@ export const DEFAULT_COMBAT_MOVE_MANAGER = {
           actionName: "combat_Att_LB_Hand_0",
           weight: 100,
           strength: 1,
+          hitWindows: [],
+          impact: createDefaultMoveImpact(),
         },
       ],
     },
@@ -72,6 +80,8 @@ export const DEFAULT_COMBAT_MOVE_MANAGER = {
           actionName: "combat_Att_RB_Hand_0",
           weight: 100,
           strength: 1,
+          hitWindows: [],
+          impact: createDefaultMoveImpact(),
         },
       ],
     },
@@ -124,6 +134,87 @@ export function normalizeCombatMove(move = {}, fallbackDirection = "forward", in
     actionName,
     weight: normalizePositiveNumber(move.weight, 1),
     strength: normalizePositiveNumber(move.strength, 1),
+    hitWindows: normalizeHitWindows(move.hitWindows),
+    impact: normalizeMoveImpact(move.impact),
+  };
+}
+
+export function createDefaultMoveImpact() {
+  return {
+    knockback: {
+      customDirection: false,
+      directionDegrees: 0,
+    },
+    hitstun: {
+      enabled: false,
+      hitActionName: "",
+    },
+  };
+}
+
+export function createDefaultHitWindow() {
+  return {
+    id: uid("hit-window"),
+    name: "攻击判定",
+    start: 0,
+    end: 0.2,
+    modelBindings: [],
+  };
+}
+
+export function createDefaultHitModelBinding(modelId = "") {
+  return {
+    modelId,
+    attackColliderIds: [],
+  };
+}
+
+export function normalizeHitWindows(value) {
+  const windows = Array.isArray(value) ? value : [];
+  return windows.map((window, index) => normalizeHitWindow(window, index)).filter(Boolean);
+}
+
+export function normalizeHitWindow(value = {}, index = 0) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const start = normalizePositiveNumber(value.start, 0);
+  const end = normalizePositiveNumber(value.end, start);
+  return {
+    id: String(value.id || uid("hit-window")),
+    name: String(value.name || `攻击判定 ${index + 1}`),
+    start: Math.min(start, end),
+    end: Math.max(start, end),
+    modelBindings: normalizeHitModelBindings(value.modelBindings),
+  };
+}
+
+export function normalizeHitModelBindings(value) {
+  const bindings = Array.isArray(value) ? value : [];
+  return bindings.map((binding) => normalizeHitModelBinding(binding)).filter(Boolean);
+}
+
+export function normalizeHitModelBinding(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const modelId = String(value.modelId || "").trim();
+  return {
+    modelId,
+    attackColliderIds: Array.isArray(value.attackColliderIds)
+      ? [...new Set(value.attackColliderIds.map((id) => String(id || "").trim()).filter(Boolean))]
+      : [],
+  };
+}
+
+export function normalizeMoveImpact(value = {}) {
+  const knockback = value?.knockback || {};
+  const hitstun = value?.hitstun || {};
+  return {
+    knockback: {
+      customDirection: !!knockback.customDirection,
+      directionDegrees: normalizeSignedNumber(knockback.directionDegrees, 0),
+    },
+    hitstun: {
+      enabled: !!hitstun.enabled,
+      hitActionName: String(hitstun.hitActionName || ""),
+    },
   };
 }
 
@@ -137,6 +228,11 @@ export function normalizeCombatDirection(value) {
 export function normalizePositiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+export function normalizeSignedNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 export function getCombatMovesForDirection(manager, direction) {

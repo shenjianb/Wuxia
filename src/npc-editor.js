@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
@@ -44,6 +45,9 @@ let ambientLight, hemiLight, keyLight;
 let previewGround, previewGrid;
 let npcModel = null;
 let skeletonOverlay = null;
+
+let altRightDragging = false;
+let altRightPrevY = 0;
 
 const refs = {};
 
@@ -147,20 +151,15 @@ function bindUI() {
 }
 
 async function initRenderer() {
-  if (!navigator.gpu) {
-    throw new Error("浏览器不支持 WebGPU。请用支持 WebGPU 的 Chrome/Edge 访问。");
-  }
-
-  scene = new THREE.Scene();
+scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0d0c);
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   camera.position.set(3.8, 2.7, 4.6);
   camera.lookAt(0, 1.05, 0);
 
-  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer = await createSafeRenderer(THREE, { antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  await renderer.init();
   refs.viewport.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -169,7 +168,10 @@ async function initRenderer() {
   controls.minDistance = 2.4;
   controls.maxDistance = 10;
   controls.maxPolarAngle = Math.PI * 0.48;
+  controls.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: 0 };
   controls.update();
+
+  bindAltRightDolly();
 
   ambientLight = new THREE.AmbientLight(0xffffff, 2.6);
   scene.add(ambientLight);
@@ -204,6 +206,44 @@ async function initRenderer() {
   clock = new THREE.Clock();
 
   resize();
+}
+
+function bindAltRightDolly() {
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", onAltRightPointerDown, true);
+  window.addEventListener("pointermove", onAltRightPointerMove);
+  window.addEventListener("pointerup", onAltRightPointerUp);
+}
+
+function onAltRightPointerDown(event) {
+  if (event.button !== 2 || !event.altKey) return;
+  altRightDragging = true;
+  altRightPrevY = event.clientY;
+  controls.enabled = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function onAltRightPointerMove(event) {
+  if (!altRightDragging) return;
+  const deltaY = altRightPrevY - event.clientY;
+  altRightPrevY = event.clientY;
+  const dist = camera.position.distanceTo(controls.target);
+  const scale = 1 + deltaY * 0.005;
+  const newDist = Math.max(
+    controls.minDistance,
+    Math.min(controls.maxDistance, dist * scale),
+  );
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, newDist);
+}
+
+function onAltRightPointerUp() {
+  if (!altRightDragging) return;
+  altRightDragging = false;
+  controls.enabled = true;
 }
 
 function resize() {

@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createFacingMarker } from "./facing-marker.js";
@@ -58,6 +59,8 @@ const CONTROL_BY_KEY = new Map(CONTROL_SCHEMA.map((control) => [control.key, con
 const loader = new GLTFLoader();
 const clock = new THREE.Clock();
 const scratchVector = new THREE.Vector3();
+let altRightDragging = false;
+let altRightPrevY = 0;
 
 let renderer;
 let scene;
@@ -289,20 +292,15 @@ function registerConfiguredAnimationAssets() {
 }
 
 async function initRenderer() {
-  if (!navigator.gpu) {
-    throw new Error("当前浏览器没有 WebGPU。请通过支持 WebGPU 的 Chrome/Edge 访问 localhost 或 HTTPS。");
-  }
-
-  scene = new THREE.Scene();
+scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0d0c);
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   camera.position.set(3.8, 2.7, 4.6);
 
-  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer = await createSafeRenderer(THREE, { antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
-  await renderer.init();
   refs.viewport.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -310,7 +308,10 @@ async function initRenderer() {
   controls.enableDamping = true;
   controls.minDistance = 2.4;
   controls.maxDistance = 10;
+  controls.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: 0 };
   controls.update();
+
+  bindAltRightDolly();
 
   scene.add(new THREE.AmbientLight(0xffffff, 2.4));
   const hemi = new THREE.HemisphereLight(0xd8ecff, 0x51452f, 2.6);
@@ -346,6 +347,44 @@ async function initRenderer() {
   scene.add(rootTrail, rootMarker, facingMarker);
 
   resize();
+}
+
+function bindAltRightDolly() {
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", onAltRightPointerDown, true);
+  window.addEventListener("pointermove", onAltRightPointerMove);
+  window.addEventListener("pointerup", onAltRightPointerUp);
+}
+
+function onAltRightPointerDown(event) {
+  if (event.button !== 2 || !event.altKey) return;
+  altRightDragging = true;
+  altRightPrevY = event.clientY;
+  controls.enabled = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function onAltRightPointerMove(event) {
+  if (!altRightDragging) return;
+  const deltaY = altRightPrevY - event.clientY;
+  altRightPrevY = event.clientY;
+  const dist = camera.position.distanceTo(controls.target);
+  const scale = 1 + deltaY * 0.005;
+  const newDist = Math.max(
+    controls.minDistance,
+    Math.min(controls.maxDistance, dist * scale),
+  );
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, newDist);
+}
+
+function onAltRightPointerUp() {
+  if (!altRightDragging) return;
+  altRightDragging = false;
+  controls.enabled = true;
 }
 
 async function loadAnimations() {

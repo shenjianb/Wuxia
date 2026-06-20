@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -58,6 +59,8 @@ const BASE_USES = [
   { id: "sceneCollision", label: "场景碰撞" },
   { id: "vision", label: "视野检测" },
 ];
+const DEFAULT_BASE_COLLIDER_STRENGTH = 10;
+const DEFAULT_PART_COLLIDER_STRENGTH = 0;
 const FUTURE_FEATURES = [
   "模型导入",
   "虚拟骨骼挂点",
@@ -69,6 +72,8 @@ const clock = new THREE.Clock();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const scratchVector = new THREE.Vector3();
+let altRightDragging = false;
+let altRightPrevY = 0;
 
 let renderer;
 let scene;
@@ -107,6 +112,7 @@ const editor = {
 };
 
 const refs = {};
+const normalizedModelConfigIds = new Set();
 
 window.__MODEL_EDITOR_READY = false;
 window.__MODEL_EDITOR_ERROR = null;
@@ -282,20 +288,15 @@ function bindUi() {
 }
 
 async function initRenderer() {
-  if (!navigator.gpu) {
-    throw new Error("当前浏览器没有 WebGPU。请使用支持 WebGPU 的 Chrome/Edge，并通过 localhost 或 HTTPS 访问。");
-  }
-
-  scene = new THREE.Scene();
+scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0d0f);
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   camera.position.set(3.8, 2.8, 4.6);
 
-  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer = await createSafeRenderer(THREE, { antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
-  await renderer.init();
   refs.viewport.appendChild(renderer.domElement);
 
   orbitControls = new OrbitControls(camera, renderer.domElement);
@@ -303,7 +304,10 @@ async function initRenderer() {
   orbitControls.enableDamping = true;
   orbitControls.minDistance = 2.2;
   orbitControls.maxDistance = 11;
+  orbitControls.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: 0 };
   orbitControls.update();
+
+  bindAltRightDolly();
 
   transformControls = new TransformControls(camera, renderer.domElement);
   transformControls.setMode(editor.transformMode);
@@ -749,6 +753,44 @@ function getVisibleColliderMeshes() {
   return meshes;
 }
 
+function bindAltRightDolly() {
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", onAltRightPointerDown, true);
+  window.addEventListener("pointermove", onAltRightPointerMove);
+  window.addEventListener("pointerup", onAltRightPointerUp);
+}
+
+function onAltRightPointerDown(event) {
+  if (event.button !== 2 || !event.altKey) return;
+  altRightDragging = true;
+  altRightPrevY = event.clientY;
+  orbitControls.enabled = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function onAltRightPointerMove(event) {
+  if (!altRightDragging) return;
+  const deltaY = altRightPrevY - event.clientY;
+  altRightPrevY = event.clientY;
+  const dist = camera.position.distanceTo(orbitControls.target);
+  const scale = 1 + deltaY * 0.005;
+  const newDist = Math.max(
+    orbitControls.minDistance,
+    Math.min(orbitControls.maxDistance, dist * scale),
+  );
+  const dir = new THREE.Vector3().subVectors(camera.position, orbitControls.target).normalize();
+  camera.position.copy(orbitControls.target).addScaledVector(dir, newDist);
+}
+
+function onAltRightPointerUp() {
+  if (!altRightDragging) return;
+  altRightDragging = false;
+  orbitControls.enabled = true;
+}
+
 function renderPanel() {
   renderModelTitle();
   renderModeButtons();
@@ -867,6 +909,10 @@ function renderBaseFields() {
     applyColliderConfigToMesh(activeCharacter.baseColliderMesh, config, "base");
     setDirty(true);
   }));
+  group.appendChild(createNumberField("基础强度", config.strength, 0.1, (value) => {
+    config.strength = Math.max(0, value);
+    setDirty(true);
+  }));
   refs.fields.appendChild(group);
 }
 
@@ -926,6 +972,10 @@ function renderPartFields() {
       setDirty(true);
     }));
   });
+  metaGroup.appendChild(createNumberField("部位强度", selected.strength, 0.1, (value) => {
+    selected.strength = Math.max(0, value);
+    setDirty(true);
+  }));
   refs.fields.appendChild(metaGroup);
 
   const transformGroup = createFieldGroup("碰撞盒参数");
@@ -991,6 +1041,21 @@ function createReadOnlyField(label, value) {
   input.type = "text";
   input.value = value || "";
   input.readOnly = true;
+  return wrapControl(label, input);
+}
+
+function createNumberField(label, value, step, onChange) {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = String(step);
+  input.value = formatInputNumber(Number.isFinite(Number(value)) ? Number(value) : 0);
+  input.addEventListener("input", () => {
+    const parsed = Number(input.value);
+    onChange(Number.isFinite(parsed) ? roundNumber(parsed) : 0);
+    updateReadout();
+    updateDebugState();
+  });
   return wrapControl(label, input);
 }
 
@@ -1091,6 +1156,7 @@ function createPartCollider(boneName) {
     size: defaults.size,
     rotationDegrees: [0, 0, 0],
     channels: ["hurt"],
+    strength: DEFAULT_PART_COLLIDER_STRENGTH,
   };
   model.partColliders.push(collider);
 
@@ -1246,13 +1312,16 @@ function ensureModelConfig(modelId) {
   }
 
   const config = modelConfig.models[modelId];
-  config.label = config.label || MODEL_BY_ID.get(modelId)?.label || modelId;
-  config.asset = config.asset || MODEL_BY_ID.get(modelId)?.fileName || `${modelId}.glb`;
-  config.baseCollider = normalizeBaseCollider(config.baseCollider, modelId);
-  config.partColliders = Array.isArray(config.partColliders)
-    ? config.partColliders.map(normalizePartCollider).filter(Boolean)
-    : [];
-  config.future = config.future || createFutureConfig();
+  if (!normalizedModelConfigIds.has(modelId)) {
+    config.label = config.label || MODEL_BY_ID.get(modelId)?.label || modelId;
+    config.asset = config.asset || MODEL_BY_ID.get(modelId)?.fileName || `${modelId}.glb`;
+    config.baseCollider = normalizeBaseCollider(config.baseCollider, modelId);
+    config.partColliders = Array.isArray(config.partColliders)
+      ? config.partColliders.map(normalizePartCollider).filter(Boolean)
+      : [];
+    config.future = config.future || createFutureConfig();
+    normalizedModelConfigIds.add(modelId);
+  }
   return config;
 }
 
@@ -1272,6 +1341,7 @@ function normalizeModelConfig(config) {
     }
   });
   modelConfig = normalized;
+  normalizedModelConfigIds.clear();
   MODELS.forEach((model) => ensureModelConfig(model.id));
   return modelConfig;
 }
@@ -1286,6 +1356,7 @@ function normalizeBaseCollider(value, modelId) {
     size: toVectorArray(config.size, fallback.size).map((item) => Math.max(0.001, item)),
     rotationDegrees: toVectorArray(config.rotationDegrees, [0, 0, 0]),
     uses: Array.isArray(config.uses) ? config.uses.filter(Boolean) : fallback.uses,
+    strength: normalizeNonNegativeNumber(config.strength, fallback.strength),
   };
 }
 
@@ -1303,6 +1374,7 @@ function normalizePartCollider(value) {
     size: toVectorArray(value.size, [0.24, 0.24, 0.24]).map((item) => Math.max(0.001, item)),
     rotationDegrees: toVectorArray(value.rotationDegrees, [0, 0, 0]),
     channels: Array.isArray(value.channels) ? value.channels.filter(Boolean) : ["hurt"],
+    strength: normalizeNonNegativeNumber(value.strength, DEFAULT_PART_COLLIDER_STRENGTH),
   };
 }
 
@@ -1319,6 +1391,7 @@ function createDefaultBaseCollider(modelId) {
     size: female ? [0.72, 2.08, 0.68] : [0.78, 2.08, 0.72],
     rotationDegrees: [0, 0, 0],
     uses: ["sceneCollision", "vision"],
+    strength: DEFAULT_BASE_COLLIDER_STRENGTH,
   };
 }
 
@@ -1508,6 +1581,7 @@ function updateReadout() {
     : record?.config?.name || "未选择";
   const boneLabel = record?.type === "part" ? record.config?.bone || "-" : "-";
   const size = record?.config?.size || [0, 0, 0];
+  const strength = record?.config?.strength ?? 0;
   refs.readout.innerHTML = `
     <div><span>Model</span><b>${escapeHtml(model?.id || "-")}</b></div>
     <div><span>Action</span><b>${escapeHtml(editor.selectedActionName || "-")}</b></div>
@@ -1515,6 +1589,7 @@ function updateReadout() {
     <div><span>Collider</span><b>${escapeHtml(colliderLabel)}</b></div>
     <div><span>Bone</span><b>${escapeHtml(boneLabel)}</b></div>
     <div><span>Size</span><b>${formatNumber(size[0])}, ${formatNumber(size[1])}, ${formatNumber(size[2])}</b></div>
+    <div><span>Strength</span><b>${formatNumber(strength)}</b></div>
   `;
 }
 
@@ -1832,6 +1907,11 @@ function roundNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 0;
   return Math.round(number * 10000) / 10000;
+}
+
+function normalizeNonNegativeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? roundNumber(number) : fallback;
 }
 
 function formatNumber(value) {

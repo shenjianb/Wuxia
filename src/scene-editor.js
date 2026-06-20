@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
@@ -54,6 +55,8 @@ let raycaster = new THREE.Raycaster();
 let isPointerDown = false;
 let isGizmoDragging = false;
 let gizmoHoverAxis = null;
+let altRightDragging = false;
+let altRightPrevY = 0;
 
 let ambientLight, hemiLight, keyLight;
 let worldGrid;
@@ -185,23 +188,21 @@ function bindCanvasEvents() {
   canvas.addEventListener("pointermove", onPointerMove, true);
   canvas.addEventListener("pointerup", onPointerUp, true);
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", onAltRightPointerDown, true);
+  window.addEventListener("pointermove", onAltRightPointerMove);
+  window.addEventListener("pointerup", onAltRightPointerUp);
 }
 
 async function initRenderer() {
-  if (!navigator.gpu) {
-    throw new Error("浏览器不支持 WebGPU。请用支持 WebGPU 的 Chrome/Edge 访问。");
-  }
-
-  scene = new THREE.Scene();
+scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0d0c);
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.5, 300);
   camera.position.set(14, 18, 20);
   camera.lookAt(0, 0, 0);
 
-  renderer = new THREE.WebGPURenderer({ antialias: true });
+  renderer = await createSafeRenderer(THREE, { antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  await renderer.init();
   refs.viewport.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -210,7 +211,7 @@ async function initRenderer() {
   controls.minDistance = 4;
   controls.maxDistance = 120;
   controls.maxPolarAngle = Math.PI * 0.48;
-  controls.mouseButtons = { LEFT: -1, MIDDLE: 2, RIGHT: 0 };
+  controls.mouseButtons = { LEFT: -1, MIDDLE: -1, RIGHT: 0 };
   controls.update();
 
   ambientLight = new THREE.AmbientLight(0xffffff, editor.ambientIntensity);
@@ -1268,6 +1269,35 @@ function onPointerUp() {
   if (!controls.enabled && !isGizmoDragging) {
     controls.enabled = true;
   }
+}
+
+function onAltRightPointerDown(event) {
+  if (event.button !== 2 || !event.altKey) return;
+  altRightDragging = true;
+  altRightPrevY = event.clientY;
+  controls.enabled = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function onAltRightPointerMove(event) {
+  if (!altRightDragging) return;
+  const deltaY = altRightPrevY - event.clientY;
+  altRightPrevY = event.clientY;
+  const dist = camera.position.distanceTo(controls.target);
+  const scale = 1 + deltaY * 0.005;
+  const newDist = Math.max(
+    controls.minDistance,
+    Math.min(controls.maxDistance, dist * scale),
+  );
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, newDist);
+}
+
+function onAltRightPointerUp() {
+  if (!altRightDragging) return;
+  altRightDragging = false;
+  controls.enabled = true;
 }
 
 function applyTerrainTool(worldHit) {

@@ -25,7 +25,8 @@
         "uses": [
           "sceneCollision",
           "vision"
-        ]
+        ],
+        "strength": 10
       },
       "partColliders": [
         {
@@ -51,7 +52,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-torso",
@@ -76,7 +78,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-left-upper-arm",
@@ -101,7 +104,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-left-forearm",
@@ -127,7 +131,8 @@
           "channels": [
             "hurt",
             "attack"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-right-upper-arm",
@@ -152,7 +157,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-right-forearm",
@@ -178,7 +184,8 @@
           "channels": [
             "hurt",
             "attack"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-left-thigh",
@@ -203,7 +210,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-left-calf",
@@ -228,7 +236,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-right-thigh",
@@ -253,7 +262,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "male-right-calf",
@@ -278,7 +288,34 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
+        },
+        {
+          "id": "male-r-hand",
+          "name": "右手",
+          "bone": "Bip001_R_Hand",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            1.0367,
+            -0.1676,
+            1.0793
+          ],
+          "size": [
+            15.9453,
+            6.2589,
+            6.8401
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "attack"
+          ],
+          "strength": 0
         }
       ],
       "future": {
@@ -313,7 +350,8 @@
         "uses": [
           "sceneCollision",
           "vision"
-        ]
+        ],
+        "strength": 10
       },
       "partColliders": [
         {
@@ -339,7 +377,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-torso",
@@ -353,9 +392,9 @@
             0
           ],
           "size": [
-            0.58,
-            0.68,
-            0.48
+            8.6034,
+            10.3218,
+            14.9401
           ],
           "rotationDegrees": [
             0,
@@ -364,32 +403,8 @@
           ],
           "channels": [
             "hurt"
-          ]
-        },
-        {
-          "id": "female-left-upper-arm",
-          "name": "左大臂",
-          "bone": "Bip001_L_UpperArm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0.11,
-            0,
-            0
           ],
-          "size": [
-            0.34,
-            0.18,
-            0.18
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ]
+          "strength": 0
         },
         {
           "id": "female-left-forearm",
@@ -403,9 +418,9 @@
             0
           ],
           "size": [
-            0.32,
-            0.16,
-            0.16
+            8.4657,
+            5.1658,
+            6.713
           ],
           "rotationDegrees": [
             0,
@@ -415,7 +430,8 @@
           "channels": [
             "hurt",
             "attack"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-right-upper-arm",
@@ -440,7 +456,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-right-forearm",
@@ -466,7 +483,8 @@
           "channels": [
             "hurt",
             "attack"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-left-thigh",
@@ -491,7 +509,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-left-calf",
@@ -516,7 +535,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-right-thigh",
@@ -541,7 +561,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-right-calf",
@@ -566,7 +587,8 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
         },
         {
           "id": "female-spine2",
@@ -581,8 +603,8 @@
           ],
           "size": [
             6.882,
-            27.3873,
-            22.3891
+            11.072,
+            14.8027
           ],
           "rotationDegrees": [
             0,
@@ -591,7 +613,60 @@
           ],
           "channels": [
             "hurt"
-          ]
+          ],
+          "strength": 0
+        },
+        {
+          "id": "female-l-hand",
+          "name": "左手",
+          "bone": "Bip001_L_Hand",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            1.0367,
+            -0.1676,
+            -1.0793
+          ],
+          "size": [
+            18.7723,
+            7.3277,
+            6.3553
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "attack"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "female-r-hand",
+          "name": "右手",
+          "bone": "Bip001_R_Hand",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            1.0367,
+            -0.1676,
+            1.0793
+          ],
+          "size": [
+            12.9779,
+            8.0735,
+            5.2623
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "attack"
+          ],
+          "strength": 0
         }
       ],
       "future": {

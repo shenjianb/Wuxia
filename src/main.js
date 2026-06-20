@@ -1,6 +1,8 @@
 import * as THREE from "three/webgpu";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createFacingMarker } from "./facing-marker.js";
+import { createSafeRenderer, getRendererBackendLabel } from "./renderer-utils.js";
+import * as combatCollision from "./combat-collision-utils.js";
 import { evaluateNpcBrain } from "./npc-ai-runtime.js";
 import {
   COMBAT_MOVE_DIRECTIONS,
@@ -49,10 +51,13 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const ACTION_FADE_DURATION = 0.22;
 const ROOT_MOTION_BLEND_OUT_GRACE = ACTION_FADE_DURATION + 0.1;
 const COMBAT_ATTACK_RECOVERY_DURATION = 0.3;
+const COMBAT_COLLIDER_DEBUG_HIT_TTL = 0.9;
+const COMBAT_COLLIDER_DEBUG_MAX_HITS = 12;
 const COMBAT_ATTACK_INPUTS = Object.fromEntries(
   COMBAT_MOVE_DIRECTIONS.map((direction) => [direction.inputCode, { direction: direction.id }]),
 );
 const COMBAT_ATTACK_DIRECTIONS = COMBAT_MOVE_DIRECTIONS.map((direction) => direction.id);
+const DEFAULT_MODEL_CONFIG = { version: 1, models: {} };
 const RUNTIME_NPC_NAME = "ONE";
 const PLAYER_DEFAULT_FACTION = 0;
 const PLAYER_DEFAULT_ATTRIBUTES = {
@@ -71,6 +76,16 @@ const NPC_ATTACK_COOLDOWN = 1.2;
 const DEFAULT_LOCK_TURN_SPEED = TURN_SPEED;
 const DEFAULT_ATTACK_ARC_DEGREES = 20;
 const DEFAULT_ATTACK_DISTANCE = NPC_ATTACK_RANGE;
+const COLLIDER_LOCAL_CORNERS = [
+  [-0.5, -0.5, -0.5],
+  [-0.5, -0.5, 0.5],
+  [-0.5, 0.5, -0.5],
+  [-0.5, 0.5, 0.5],
+  [0.5, -0.5, -0.5],
+  [0.5, -0.5, 0.5],
+  [0.5, 0.5, -0.5],
+  [0.5, 0.5, 0.5],
+].map((point) => new THREE.Vector3(...point));
 const DEFAULT_MODE_SWITCH_CONFIGS = {
   default: { minDurationMs: 0, stableDurationMs: 0, lostTargetGraceMs: 0, interruptibleBy: ["alert", "attack", "flee"] },
   alert: { minDurationMs: 1200, stableDurationMs: 700, lostTargetGraceMs: 1200, interruptibleBy: ["attack", "flee"] },
@@ -96,6 +111,16 @@ function createCombatAttackState() {
     queuedDirection: null,
     recoveryTimer: 0,
     aiCooldown: 0,
+    hitKeys: new Set(),
+  };
+}
+
+function createHitReactionState() {
+  return {
+    active: false,
+    timer: 0,
+    actionName: null,
+    sourceId: null,
   };
 }
 
@@ -112,6 +137,7 @@ overlay.innerHTML = `
     <div class="runtime-controls">
       <div class="badge" data-renderer>WebGPU</div>
       <div class="badge" data-combat-mode>Normal</div>
+      <div class="badge" data-combat-collider-debug>HitBox H: Off</div>
     </div>
   </div>
   <div class="panel" data-panel>
@@ -139,6 +165,7 @@ const state = {
   },
   globalMotionMode: "InPlace",
   combatMode: false,
+  debugCombatColliders: false,
   combatAttack: createCombatAttackState(),
 };
 
@@ -161,6 +188,9 @@ scene.add(rootMarker);
 const facingMarker = createFacingMarker(THREE, { renderOrder: 2 });
 facingMarker.visible = false;
 scene.add(facingMarker);
+
+const combatColliderDebug = createCombatColliderDebugState();
+scene.add(combatColliderDebug.group);
 
 const camera = new THREE.OrthographicCamera(-8, 8, 5, -5, 0.1, 80);
 const cameraTarget = new THREE.Vector3();
@@ -185,6 +215,7 @@ let renderer;
 let characters;
 let animations;
 let motionConfig = {};
+let modelConfig = DEFAULT_MODEL_CONFIG;
 let combatMoveManager = normalizeCombatMoveManager(DEFAULT_COMBAT_MOVE_MANAGER);
 let combatAttackActionNames = new Set(getCombatMoveActionNames(combatMoveManager));
 let selectionSet;
@@ -200,32 +231,23 @@ boot();
 
 async function boot() {
   try {
-    if (!navigator.gpu) {
-      throw new Error("当前浏览器没有暴露 navigator.gpu。请用支持 WebGPU 的 Chrome/Edge，并通过 localhost 或 HTTPS 访问。");
-    }
-
-    renderer = new THREE.WebGPURenderer({ antialias: true });
+    renderer = await createSafeRenderer(THREE, { antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
-    await renderer.init();
-
-    if (!renderer.backend?.isWebGPUBackend) {
-      throw new Error("three.js 初始化时没有拿到 WebGPU backend。");
-    }
 
     app.appendChild(renderer.domElement);
-    setRendererBadge("WebGPU", true);
+    setRendererBadge(getRendererBackendLabel(renderer), true);
 
     try {
       const configResponse = await fetch(assetUrl("./assets/animations/motion_config.json"));
       motionConfig = await configResponse.json();
-      console.log("动作配置加载成功:", motionConfig);
+      console.log("motion_config loaded:", motionConfig);
       if (motionConfig.walk && motionConfig.walk.motionMode) {
         state.globalMotionMode = motionConfig.walk.motionMode;
       }
     } catch (e) {
-      console.warn("未能成功从网络加载 motion_config.json，使用默认原地配置:", e);
+      console.warn("Failed to load motion_config.json; using fallback config.", e);
       motionConfig = {
         idle: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
         walk: { motionMode: "InPlace", loop: true, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: true },
@@ -239,11 +261,12 @@ async function boot() {
         combat_Att_F_Hand_1_Ro: { motionMode: "RootMotion", loop: false, bakeIntoPoseXZ: false, bakeIntoPoseY: true, bakeIntoPoseRotation: true, rootSwayScale: 1.5, applyRootRotation: false, rootPoseRotation: true, rootPoseRotationAnchor: "clipStart", rootMotionMoveBasis: "characterForward" },
         combat_Att_F_Hand_2: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1.5 },
         combat_Att_LB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 },
-        combat_Att_RB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 }
+        combat_Att_RB_Hand_0: { motionMode: "InPlace", loop: false, bakeIntoPoseXZ: true, bakeIntoPoseY: true, bakeIntoPoseRotation: false, rootSwayScale: 1 },
       };
     }
 
     combatMoveManager = await loadCombatMoveManager();
+    modelConfig = await loadModelConfig();
     registerCombatMoveAnimationAssets();
     animations = await loadAnimations();
     characters = {
@@ -257,14 +280,15 @@ async function boot() {
     document.body.dataset.ready = "true";
     bindInput();
     updateCombatModeUI();
+    updateCombatColliderDebugUI();
     resize();
     renderer.render(scene, camera);
     await renderer.setAnimationLoop(update);
   } catch (error) {
     console.error(error);
     window.__DEMO_ERROR = error.message;
-    setRendererBadge("WebGPU 不可用", false);
-    document.querySelector("[data-panel]").innerHTML = `<div class="title">WebGPU 初始化失败</div><p>${error.message}</p>`;
+    setRendererBadge("Renderer unavailable", false);
+    document.querySelector("[data-panel]").innerHTML = `<div class="title">Renderer init failed</div><p>${error.message}</p>`;
   }
 }
 
@@ -278,14 +302,29 @@ async function loadAnimations() {
   return Object.fromEntries(entries);
 }
 
+function mergeAnimationClips(clips, name) {
+  const tracks = clips.flatMap((clip) => clip.tracks.map((track) => track.clone()));
+  return new THREE.AnimationClip(name, -1, tracks);
+}
 async function loadCombatMoveManager() {
   try {
     const response = await fetch(assetUrl("./assets/combat/move_manager.json"), { cache: "no-store" });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     return normalizeCombatMoveManager(await response.json());
   } catch (error) {
-    console.warn("未能加载招式管理器配置，使用默认招式池:", error);
+    console.warn("Failed to load combat move manager; using default move pool.", error);
     return normalizeCombatMoveManager(DEFAULT_COMBAT_MOVE_MANAGER);
+  }
+}
+
+async function loadModelConfig() {
+  try {
+    const response = await fetch(assetUrl("./assets/models/model_config.json"), { cache: "no-store" });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return normalizeRuntimeModelConfig(await response.json());
+  } catch (error) {
+    console.warn("Failed to load model collider config; combat hit tests may be skipped.", error);
+    return normalizeRuntimeModelConfig(DEFAULT_MODEL_CONFIG);
   }
 }
 
@@ -293,17 +332,17 @@ function registerCombatMoveAnimationAssets() {
   combatMoveManager = normalizeCombatMoveManager(combatMoveManager);
   combatAttackActionNames = new Set(getCombatMoveActionNames(combatMoveManager));
   getAllCombatMoves(combatMoveManager).forEach((move) => {
-    const actionName = move.actionName;
-    if (ASSETS.animations[actionName]) return;
-    const fileName = move.actionFile || inferAnimationFileForActionName(actionName, [], motionConfig);
-    if (!fileName) return;
-    ASSETS.animations[actionName] = assetUrl(`./assets/animations/${fileName}`);
+    registerAnimationAssetForActionName(move.actionName, move.actionFile);
+    const hitActionName = move.impact?.hitstun?.hitActionName;
+    if (hitActionName) registerAnimationAssetForActionName(hitActionName);
   });
 }
 
-function mergeAnimationClips(clips, name) {
-  const tracks = clips.flatMap((clip) => clip.tracks.map((track) => track.clone()));
-  return new THREE.AnimationClip(name, -1, tracks);
+function registerAnimationAssetForActionName(actionName, explicitFile = "") {
+  if (!actionName || ASSETS.animations[actionName]) return;
+  const fileName = explicitFile || inferAnimationFileForActionName(actionName, [], motionConfig);
+  if (!fileName) return;
+  ASSETS.animations[actionName] = assetUrl(`./assets/animations/${fileName}`);
 }
 
 // 辅助函数：计算动画轨道在特定时间点的值（用于首尾增量计算）
@@ -588,6 +627,32 @@ function updateVisualYawOffset(character, delta) {
   character.scene.rotation.y = character.sceneRestRotationY + character.visualYawOffset;
 }
 
+function inferModelConfigId(gender, url = "") {
+  const key = String(gender || "").toLowerCase();
+  const asset = String(url || "").toLowerCase();
+  if (key.includes("female") || asset.includes("sk_basefemale")) return "SK_BaseFemale";
+  return "SK_BaseMale";
+}
+
+function normalizeRuntimeModelConfig(config = {}) {
+  return combatCollision.normalizeRuntimeModelConfig(config, { characterHeight: CHARACTER_HEIGHT });
+}
+
+function normalizeRuntimeBaseCollider(value = {}) {
+  return combatCollision.normalizeRuntimeBaseCollider(value, { characterHeight: CHARACTER_HEIGHT });
+}
+
+function normalizeRuntimePartCollider(value = {}) {
+  return combatCollision.normalizeRuntimePartCollider(value);
+}
+
+function toRuntimeVectorArray(value, fallback) {
+  return combatCollision.toRuntimeVectorArray(value, fallback);
+}
+
+function normalizeRuntimeNonNegativeNumber(value, fallback) {
+  return combatCollision.normalizeRuntimeNonNegativeNumber(value, fallback);
+}
 async function createCharacter(gender, url) {
   const gltf = await loader.loadAsync(url);
   const root = new THREE.Group();
@@ -611,10 +676,12 @@ async function createCharacter(gender, url) {
 
   const mixer = new THREE.AnimationMixer(gltf.scene);
   const actions = createCharacterActions(mixer, gltf.scene);
+  const modelConfigId = inferModelConfigId(gender, url);
   if (!DISABLE_ANIMATION) actions.idle.play();
 
   return {
     gender,
+    modelConfigId,
     root,
     scene: gltf.scene,
     mixer,
@@ -639,6 +706,8 @@ async function createCharacter(gender, url) {
     visualYawOffset: 0,
     rootRestPosition,
     rootRestQuaternion,
+    hitReaction: createHitReactionState(),
+    lastCombatHit: null,
     active: true,
   };
 }
@@ -1002,6 +1071,7 @@ function enterWorld() {
     faction: PLAYER_DEFAULT_FACTION,
     attributes: { ...PLAYER_DEFAULT_ATTRIBUTES },
   };
+  player.combatAttack = state.combatAttack;
   cameraTarget.set(0, 1, 0);
   spawnRuntimeNpcOneNearPlayer();
 }
@@ -1065,6 +1135,7 @@ async function spawnRuntimeNpcOneNearPlayer() {
         visionHelper: null,
         modeLabel: null,
       };
+      character.combatAttack = runtimeNpc.combatAttack;
       runtimeNpc.visionHelper = createNpcVisionHelper(runtimeNpc.vision);
       character.root.add(runtimeNpc.visionHelper);
       runtimeNpc.modeLabel = createNpcModeLabel(runtimeNpc);
@@ -1430,6 +1501,24 @@ function toggleCombatMode() {
   updateCombatModeUI();
 }
 
+
+function updateCombatColliderDebugUI() {
+  const badge = document.querySelector("[data-combat-collider-debug]");
+  if (!badge) return;
+  badge.classList.toggle("active", state.debugCombatColliders);
+  badge.textContent = state.debugCombatColliders ? "HitBox H: On" : "HitBox H: Off";
+}
+
+function toggleCombatColliderDebug() {
+  state.debugCombatColliders = !state.debugCombatColliders;
+  combatColliderDebug.enabled = state.debugCombatColliders;
+  updateCombatColliderDebugUI();
+  if (!state.debugCombatColliders) {
+    combatColliderDebug.hits.length = 0;
+    clearCombatColliderDebugObjects();
+  }
+}
+
 function updateCombatModeUI() {
   const badge = document.querySelector("[data-combat-mode]");
   if (!badge) return;
@@ -1489,6 +1578,7 @@ function beginCharacterCombatAttack(character, attackState, direction, preferred
   attackState.activeStrength = selectedMove.strength;
   attackState.queuedDirection = null;
   attackState.recoveryTimer = 0;
+  attackState.hitKeys?.clear();
 
   configureAnimationAction(actionName, action);
   if (character.currentAction === action) {
@@ -1526,6 +1616,7 @@ function finishCharacterCombatAttack(attackState) {
   attackState.activeStrength = 1;
   attackState.queuedDirection = null;
   attackState.recoveryTimer = COMBAT_ATTACK_RECOVERY_DURATION;
+  attackState.hitKeys?.clear();
 }
 
 function cancelCombatAttack({ clearKeys = false } = {}) {
@@ -1542,6 +1633,7 @@ function cancelCharacterCombatAttack(attackState, { clearKeys = false } = {}) {
   attackState.activeStrength = 1;
   attackState.queuedDirection = null;
   attackState.recoveryTimer = 0;
+  attackState.hitKeys?.clear();
   if (clearKeys) {
     COMBAT_ATTACK_DIRECTIONS.forEach((direction) => {
       attackState.keys[direction] = false;
@@ -1567,6 +1659,260 @@ function isCombatAttackComplete(actionName, action) {
   return action.paused || action.time >= Math.max(0, clip.duration - 0.035);
 }
 
+function getPlayerCombatTargets() {
+  return runtimeNpcs
+    .map((runtimeNpc) => runtimeNpc.character)
+    .filter((character) => isActiveCombatTarget(character));
+}
+
+function getNpcCombatTargets() {
+  return player && isActiveCombatTarget(player) ? [player] : [];
+}
+
+function isActiveCombatTarget(character) {
+  return !!character?.active && !!character?.root?.visible;
+}
+
+function evaluateCombatAttackHits(attacker, attackState, targets = []) {
+  if (!attacker || !attackState?.active || !attackState.activeMoveId) return;
+  const move = getRuntimeCombatMoveById(attackState.activeMoveId);
+  if (!move?.hitWindows?.length) return;
+
+  const action = attacker.actions?.[attackState.activeActionName];
+  if (!action) return;
+
+  const time = action.time;
+  const activeWindows = move.hitWindows.filter((hitWindow) => (
+    time >= hitWindow.start && time <= hitWindow.end
+  ));
+  if (!activeWindows.length) return;
+
+  const attackerModel = getRuntimeModelConfigForCharacter(attacker);
+  if (!attackerModel) return;
+
+  attacker.root.updateMatrixWorld(true);
+  activeWindows.forEach((hitWindow) => {
+    const attackColliders = getAttackCollidersForHitWindow(attackerModel, attacker.modelConfigId, hitWindow);
+    if (!attackColliders.length) return;
+
+    const attackBoxes = attackColliders
+      .map((collider) => ({
+        collider,
+        box: createPartColliderWorldBox(attacker, collider),
+      }))
+      .filter((entry) => entry.box);
+    if (!attackBoxes.length) return;
+
+    targets.forEach((target) => {
+      if (!isActiveCombatTarget(target) || target === attacker) return;
+      const targetModel = getRuntimeModelConfigForCharacter(target);
+      if (!targetModel) return;
+
+      target.root.updateMatrixWorld(true);
+      const hurtColliders = getRuntimePartCollidersForChannel(targetModel, "hurt");
+      let bestHit = null;
+
+      attackBoxes.forEach((attackEntry) => {
+        hurtColliders.forEach((hurtCollider) => {
+          const hitKey = makeCombatHitKey(move, hitWindow, target, hurtCollider);
+          if (attackState.hitKeys?.has(hitKey)) return;
+
+          const hurtBox = createPartColliderWorldBox(target, hurtCollider);
+          if (!hurtBox || !attackEntry.box.intersectsBox(hurtBox)) return;
+
+          const hit = createCombatHitResult({
+            attacker,
+            target,
+            move,
+            hitWindow,
+            attackCollider: attackEntry.collider,
+            hurtCollider,
+            targetModel,
+            hitKey,
+          });
+          if (!bestHit || hit.strengthDelta > bestHit.strengthDelta) bestHit = hit;
+        });
+      });
+
+      if (!bestHit) return;
+      attackState.hitKeys?.add(bestHit.hitKey);
+      applyCombatHit(bestHit);
+      recordCombatColliderDebugHit(bestHit);
+    });
+  });
+}
+
+function makeCombatHitKey(move, hitWindow, target, hurtCollider) {
+  return [
+    move.id,
+    hitWindow.id,
+    getRuntimeCharacterId(target),
+    hurtCollider.id,
+  ].join(":");
+}
+
+function createCombatHitResult({
+  attacker,
+  target,
+  move,
+  hitWindow,
+  attackCollider,
+  hurtCollider,
+  targetModel,
+  hitKey,
+}) {
+  const outputStrength = normalizeRuntimeNonNegativeNumber(move.strength, 1)
+    + normalizeRuntimeNonNegativeNumber(attackCollider.strength, 0);
+  const defenseStrength = normalizeRuntimeNonNegativeNumber(targetModel.baseCollider?.strength, 0)
+    + normalizeRuntimeNonNegativeNumber(hurtCollider.strength, 0);
+  const strengthDelta = outputStrength - defenseStrength;
+  return {
+    attacker,
+    target,
+    move,
+    hitWindow,
+    attackCollider,
+    hurtCollider,
+    targetModel,
+    outputStrength,
+    defenseStrength,
+    strengthDelta,
+    hitKey,
+  };
+}
+
+function applyCombatHit(hit) {
+  const knockbackDistance = Math.max(0, hit.strengthDelta * 0.1);
+  if (knockbackDistance > 0) {
+    applyCharacterKnockback(
+      hit.target,
+      getCombatKnockbackDirection(hit.attacker, hit.move),
+      knockbackDistance,
+    );
+  }
+
+  const hitstunApplied = hit.strengthDelta > 0
+    && hit.move.impact?.hitstun?.enabled
+    && applyCharacterHitReaction(
+      hit.target,
+      hit.move.impact.hitstun.hitActionName,
+      hit.attacker,
+    );
+
+  const record = {
+    moveId: hit.move.id,
+    moveName: hit.move.name,
+    hitWindowId: hit.hitWindow.id,
+    attackColliderId: hit.attackCollider.id,
+    hurtColliderId: hit.hurtCollider.id,
+    outputStrength: hit.outputStrength,
+    defenseStrength: hit.defenseStrength,
+    strengthDelta: hit.strengthDelta,
+    knockbackDistance,
+    hitstunApplied,
+  };
+  hit.attacker.lastCombatHitDealt = record;
+  hit.target.lastCombatHit = record;
+}
+
+function getCombatKnockbackDirection(attacker, move) {
+  return combatCollision.getCombatKnockbackDirection(THREE, attacker, move, WORLD_UP);
+}
+
+function applyCharacterKnockback(character, direction, distance) {
+  if (!character || distance <= 0 || direction.lengthSq() <= 0.000001) return;
+  const steps = Math.max(1, Math.ceil(distance / 0.16));
+  const step = direction.clone().setY(0).normalize().multiplyScalar(distance / steps);
+  for (let i = 0; i < steps; i += 1) {
+    const next = character.root.position.clone().add(step);
+    if (!canMoveTo(next)) break;
+    character.root.position.copy(next);
+  }
+  character.root.updateMatrixWorld(true);
+}
+
+function applyCharacterHitReaction(character, actionName, sourceCharacter) {
+  const action = character?.actions?.[actionName];
+  const clip = animations[actionName];
+  if (!character || !action || !clip) return false;
+
+  const attackState = getCharacterCombatAttackState(character);
+  if (attackState?.active) cancelCharacterCombatAttack(attackState);
+
+  character.hitReaction.active = true;
+  character.hitReaction.timer = Math.max(0.05, clip.duration);
+  character.hitReaction.actionName = actionName;
+  character.hitReaction.sourceId = getRuntimeCharacterId(sourceCharacter);
+
+  action.enabled = true;
+  action.paused = false;
+  action.clampWhenFinished = true;
+  action.setLoop(THREE.LoopOnce, 1);
+  action.timeScale = 1;
+  action.reset();
+  character.desiredAction = action;
+  return true;
+}
+
+function updateCharacterHitReaction(character, delta) {
+  const reaction = character?.hitReaction;
+  if (!reaction?.active) return false;
+
+  const action = character.actions?.[reaction.actionName];
+  if (!action) {
+    clearCharacterHitReaction(character);
+    return false;
+  }
+
+  reaction.timer = Math.max(0, reaction.timer - delta);
+  character.desiredAction = action;
+  if (character.actions.walk) character.actions.walk.timeScale = 1;
+  if (character.actions.combatWalk) character.actions.combatWalk.timeScale = 1;
+
+  if (reaction.timer > 0) return true;
+  clearCharacterHitReaction(character);
+  return false;
+}
+
+function clearCharacterHitReaction(character) {
+  if (!character?.hitReaction) return;
+  character.hitReaction.active = false;
+  character.hitReaction.timer = 0;
+  character.hitReaction.actionName = null;
+  character.hitReaction.sourceId = null;
+}
+
+function getCharacterCombatAttackState(character) {
+  if (!character) return null;
+  if (character === player) return state.combatAttack;
+  return character.combatAttack || runtimeNpcs.find((runtimeNpc) => runtimeNpc.character === character)?.combatAttack || null;
+}
+
+function getRuntimeModelConfigForCharacter(character) {
+  const modelId = character?.modelConfigId || inferModelConfigId(character?.gender);
+  return modelConfig.models?.[modelId] || null;
+}
+
+function getAttackCollidersForHitWindow(model, modelId, hitWindow) {
+  return combatCollision.getAttackCollidersForHitWindow(model, modelId, hitWindow);
+}
+
+function getRuntimePartCollidersForChannel(model, channel) {
+  return combatCollision.getRuntimePartCollidersForChannel(model, channel);
+}
+
+function createPartColliderWorldBox(character, collider) {
+  return combatCollision.createPartColliderWorldBox(THREE, character, collider, COLLIDER_LOCAL_CORNERS);
+}
+
+function createColliderWorldBox(parent, collider, type) {
+  return combatCollision.createColliderWorldBox(THREE, parent, collider, type, COLLIDER_LOCAL_CORNERS);
+}
+
+function getRuntimeCharacterId(character) {
+  return character?.runtime?.id || character?.root?.uuid || "unknown";
+}
+
 function updateCombatAttackState() {
   if (state.mode !== "game" || !state.combatMode) {
     cancelCombatAttack();
@@ -1589,6 +1935,7 @@ function updateCombatAttackState() {
 
   player.desiredAction = action;
   if (player.currentAction !== action || !isCombatAttackComplete(actionName, action)) {
+    if (player.currentAction === action) evaluateCombatAttackHits(player, attack, getPlayerCombatTargets());
     return actionName;
   }
 
@@ -1618,6 +1965,10 @@ function bindInput() {
     if (event.code === "Tab" && !event.repeat) {
       event.preventDefault();
       toggleCombatMode();
+    }
+    if (event.code === "KeyH" && !event.repeat) {
+      event.preventDefault();
+      toggleCombatColliderDebug();
     }
     const attackInput = getCombatAttackInput(event.code);
     if (attackInput) {
@@ -1826,11 +2177,197 @@ function update(time) {
 
   updateRootMarker();
   updateFacingMarker();
+  updateCombatColliderDebugLayer(delta);
   updateCamera(delta);
   window.__DEMO_STATE = getDebugState();
   renderer.render(scene, camera);
 }
 
+function createCombatColliderDebugState() {
+  const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+  const geometry = new THREE.EdgesGeometry(boxGeometry);
+  boxGeometry.dispose();
+  const group = new THREE.Group();
+  group.name = "CombatColliderDebugLayer";
+  group.visible = false;
+  return {
+    enabled: false,
+    group,
+    geometry,
+    objects: [],
+    pool: [],
+    hits: [],
+    materials: {
+      enabled: createCombatColliderDebugMaterial(0x43d7ff, 0.58),
+      attack: createCombatColliderDebugMaterial(0xff3048, 1),
+      hit: createCombatColliderDebugMaterial(0xffffff, 1),
+    },
+  };
+}
+
+function createCombatColliderDebugMaterial(color, opacity) {
+  return new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    depthTest: false,
+    depthWrite: false,
+  });
+}
+
+function clearCombatColliderDebugObjects() {
+  combatColliderDebug.objects.forEach((object) => {
+    if (object.parent) object.parent.remove(object);
+    object.visible = false;
+    combatColliderDebug.pool.push(object);
+  });
+  combatColliderDebug.objects.length = 0;
+  combatColliderDebug.group.visible = false;
+}
+
+function updateCombatColliderDebugLayer(delta) {
+  if (!combatColliderDebug.enabled) {
+    clearCombatColliderDebugObjects();
+    return;
+  }
+
+  try {
+    combatColliderDebug.hits = combatColliderDebug.hits
+      .map((entry) => ({ ...entry, ttl: entry.ttl - delta }))
+      .filter((entry) => entry.ttl > 0 && isActiveCombatTarget(entry.target) && isActiveCombatTarget(entry.attacker));
+
+    clearCombatColliderDebugObjects();
+    combatColliderDebug.group.visible = true;
+    const characters = getRuntimeCombatCharacters();
+    characters.forEach(renderEnabledCombatColliderDebug);
+    characters.forEach(renderActiveAttackColliderDebug);
+    renderRecentHurtColliderDebug();
+  } catch (error) {
+    console.warn("Combat collider debug draw failed; H debug has been disabled.", error);
+    state.debugCombatColliders = false;
+    combatColliderDebug.enabled = false;
+    combatColliderDebug.hits.length = 0;
+    clearCombatColliderDebugObjects();
+    updateCombatColliderDebugUI();
+  }
+}
+
+function getRuntimeCombatCharacters() {
+  return [player, ...runtimeNpcs.map((runtimeNpc) => runtimeNpc.character)]
+    .filter((character) => isActiveCombatTarget(character));
+}
+
+function renderEnabledCombatColliderDebug(character) {
+  const model = getRuntimeModelConfigForCharacter(character);
+  if (!model) return;
+
+  character.root.updateMatrixWorld(true);
+  if (model.baseCollider?.enabled !== false) {
+    addCombatBaseColliderDebugWire(character, model.baseCollider, "enabled");
+  }
+  (model.partColliders || [])
+    .filter((collider) => collider.enabled !== false)
+    .forEach((collider) => addCombatPartColliderDebugWire(character, collider, "enabled"));
+}
+
+function renderActiveAttackColliderDebug(character) {
+  const attackState = getCharacterCombatAttackState(character);
+  if (!attackState?.active || !attackState.activeMoveId) return;
+  const move = getRuntimeCombatMoveById(attackState.activeMoveId);
+  const action = character.actions?.[attackState.activeActionName];
+  const model = getRuntimeModelConfigForCharacter(character);
+  if (!move?.hitWindows?.length || !action || !model) return;
+
+  const activeWindows = move.hitWindows.filter((hitWindow) => (
+    action.time >= hitWindow.start && action.time <= hitWindow.end
+  ));
+  if (!activeWindows.length) return;
+
+  character.root.updateMatrixWorld(true);
+  activeWindows.forEach((hitWindow) => {
+    getAttackCollidersForHitWindow(model, character.modelConfigId, hitWindow)
+      .forEach((collider) => addCombatPartColliderDebugWire(character, collider, "attack"));
+  });
+}
+
+function renderRecentHurtColliderDebug() {
+  const rendered = new Set();
+  combatColliderDebug.hits.forEach((entry) => {
+    const attackerId = getRuntimeCharacterId(entry.attacker);
+    const attackKey = `${attackerId}:attack:${entry.attackCollider?.id || "unknown"}`;
+    if (entry.attackCollider && !rendered.has(attackKey)) {
+      addCombatPartColliderDebugWire(entry.attacker, entry.attackCollider, "attack");
+      rendered.add(attackKey);
+    }
+
+    const targetId = getRuntimeCharacterId(entry.target);
+    const baseKey = `${targetId}:hit-base`;
+    if (entry.baseCollider?.enabled !== false && !rendered.has(baseKey)) {
+      addCombatBaseColliderDebugWire(entry.target, entry.baseCollider, "hit");
+      rendered.add(baseKey);
+    }
+    const hurtKey = `${targetId}:hit:${entry.hurtCollider?.id || "unknown"}`;
+    if (entry.hurtCollider && !rendered.has(hurtKey)) {
+      addCombatPartColliderDebugWire(entry.target, entry.hurtCollider, "hit");
+      rendered.add(hurtKey);
+    }
+  });
+}
+
+function getCombatColliderDebugMaterial(role) {
+  if (role === "attack") return combatColliderDebug.materials.attack;
+  if (role === "hit") return combatColliderDebug.materials.hit;
+  return combatColliderDebug.materials.enabled;
+}
+
+function addCombatBaseColliderDebugWire(character, collider, role = "enabled") {
+  if (!character?.root || !collider) return;
+  const wire = createCombatColliderDebugWire(collider, "base", getCombatColliderDebugMaterial(role), role);
+  character.root.add(wire);
+  combatColliderDebug.objects.push(wire);
+}
+
+function addCombatPartColliderDebugWire(character, collider, role = "enabled") {
+  const bone = character?.scene?.getObjectByName(collider?.bone);
+  if (!bone || !collider) return;
+  const wire = createCombatColliderDebugWire(collider, "part", getCombatColliderDebugMaterial(role), role);
+  bone.add(wire);
+  combatColliderDebug.objects.push(wire);
+}
+
+function createCombatColliderDebugWire(collider, type, material, role = "enabled") {
+  const wire = combatColliderDebug.pool.pop() || new THREE.LineSegments(combatColliderDebug.geometry, material);
+  wire.material = material;
+  wire.name = `CombatColliderDebug_${role}_${type}_${collider.id || "base"}`;
+  wire.visible = true;
+  wire.renderOrder = role === "hit" ? 46 : role === "attack" ? 44 : 40;
+  const position = toRuntimeVectorArray(type === "base" ? collider.center : collider.offset, [0, 0, 0]);
+  const size = toRuntimeVectorArray(collider.size, [0.24, 0.24, 0.24]).map((item) => Math.max(0.001, Math.abs(item)));
+  const rotation = toRuntimeVectorArray(collider.rotationDegrees, [0, 0, 0]);
+  wire.position.set(...position);
+  wire.scale.set(...size);
+  wire.rotation.set(
+    THREE.MathUtils.degToRad(rotation[0]),
+    THREE.MathUtils.degToRad(rotation[1]),
+    THREE.MathUtils.degToRad(rotation[2]),
+  );
+  return wire;
+}
+
+function recordCombatColliderDebugHit(hit) {
+  if (!combatColliderDebug.enabled) return;
+  combatColliderDebug.hits.push({
+    attacker: hit.attacker,
+    attackCollider: hit.attackCollider,
+    target: hit.target,
+    baseCollider: hit.targetModel?.baseCollider || null,
+    hurtCollider: hit.hurtCollider,
+    ttl: COMBAT_COLLIDER_DEBUG_HIT_TTL,
+  });
+  if (combatColliderDebug.hits.length > COMBAT_COLLIDER_DEBUG_MAX_HITS) {
+    combatColliderDebug.hits.splice(0, combatColliderDebug.hits.length - COMBAT_COLLIDER_DEBUG_MAX_HITS);
+  }
+}
 function updateRootMarker() {
   rootMarker.visible = !!player && player.root.visible;
   if (!rootMarker.visible) return;
@@ -1940,6 +2477,9 @@ function getDebugState() {
     facingMarkerRotationY: facingMarker.rotation.y,
     facingMarkerVisible: facingMarker.visible,
     combatMode: state.combatMode,
+    combatColliderDebugEnabled: state.debugCombatColliders,
+    combatColliderDebugObjectCount: combatColliderDebug.objects.length,
+    combatColliderDebugHitCount: combatColliderDebug.hits.length,
     combatAttackActive: state.combatAttack.active,
     combatAttackDirection: state.combatAttack.activeDirection,
     combatAttackAction: state.combatAttack.activeActionName,
@@ -1950,7 +2490,12 @@ function getDebugState() {
     combatAttackQueuedDirection: state.combatAttack.queuedDirection,
     combatAttackKeys: { ...state.combatAttack.keys },
     combatAttackRecoveryTimer: state.combatAttack.recoveryTimer,
+    combatAttackHitCount: state.combatAttack.hitKeys?.size ?? 0,
     combatMoveActions: [...combatAttackActionNames],
+    playerModelConfigId: player?.modelConfigId ?? null,
+    playerHitReaction: player?.hitReaction ? { ...player.hitReaction } : null,
+    playerLastCombatHit: player?.lastCombatHit ?? null,
+    playerLastCombatHitDealt: player?.lastCombatHitDealt ?? null,
     currentAction: player ? getActionName(player, player.currentAction) : null,
     desiredAction: debugActionName,
     visualYawOffsetDegrees: player
@@ -2003,6 +2548,11 @@ function getDebugState() {
       combatAttackMoveId: runtimeNpc.combatAttack.activeMoveId,
       combatAttackMoveName: runtimeNpc.combatAttack.activeMoveName,
       combatAttackStrength: runtimeNpc.combatAttack.activeStrength,
+      combatAttackHitCount: runtimeNpc.combatAttack.hitKeys?.size ?? 0,
+      modelConfigId: runtimeNpc.character.modelConfigId,
+      hitReaction: { ...runtimeNpc.character.hitReaction },
+      lastCombatHit: runtimeNpc.character.lastCombatHit,
+      lastCombatHitDealt: runtimeNpc.character.lastCombatHitDealt,
     })),
     selectionChildren: selectionSet?.children.length ?? 0,
     rendererSize: renderer ? renderer.getDrawingBufferSize(new THREE.Vector2()).toArray() : null,
@@ -2010,6 +2560,8 @@ function getDebugState() {
 }
 
 function updatePlayer(delta) {
+  if (updateCharacterHitReaction(player, delta)) return;
+
   const attackActionName = updateCombatAttackState();
   if (attackActionName) {
     if (player.actions.walk) player.actions.walk.timeScale = 1.0;
@@ -2022,6 +2574,9 @@ function updatePlayer(delta) {
     moving: state.keys.forward,
     turn: (state.keys.left ? 1 : 0) - (state.keys.right ? 1 : 0),
     combatMode: state.combatMode,
+    combatColliderDebugEnabled: state.debugCombatColliders,
+    combatColliderDebugObjectCount: combatColliderDebug.objects.length,
+    combatColliderDebugHitCount: combatColliderDebug.hits.length,
     controlScale,
   }, delta);
   return;
@@ -2194,6 +2749,10 @@ function updateRuntimeNpcs(delta) {
     if (!runtimeNpc.character.active || !runtimeNpc.character.root.visible) return;
     refreshNpcVisionHelper(runtimeNpc);
     updateRuntimeNpcBrain(runtimeNpc, delta);
+    if (updateCharacterHitReaction(runtimeNpc.character, delta)) {
+      updateNpcModeLabelTransform(runtimeNpc);
+      return;
+    }
     executeRuntimeNpcBehavior(runtimeNpc, delta);
     updateNpcModeLabelTransform(runtimeNpc);
   });
@@ -2677,6 +3236,9 @@ function updateNpcCombatAttack(runtimeNpc, shouldAttack, delta, attackNode = nul
 
   runtimeNpc.character.desiredAction = action;
   if (runtimeNpc.character.currentAction !== action || !isCombatAttackComplete(actionName, action)) {
+    if (runtimeNpc.character.currentAction === action) {
+      evaluateCombatAttackHits(runtimeNpc.character, attack, getNpcCombatTargets(runtimeNpc));
+    }
     return actionName;
   }
 

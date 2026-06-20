@@ -12,8 +12,40 @@
           "triggerDirection": "forward",
           "actionFile": "Anim_Combat_Att_F_Hand_1_Ro.glb",
           "actionName": "combat_Att_F_Hand_1_Ro",
-          "weight": 23,
-          "strength": 2
+          "weight": 21,
+          "strength": 20,
+          "hitWindows": [
+            {
+              "id": "hit-window-mqkoixjp-1",
+              "name": "攻击判定",
+              "start": 0.5,
+              "end": 0.8,
+              "modelBindings": [
+                {
+                  "modelId": "SK_BaseFemale",
+                  "attackColliderIds": [
+                    "female-r-hand"
+                  ]
+                },
+                {
+                  "modelId": "SK_BaseMale",
+                  "attackColliderIds": [
+                    "male-r-hand"
+                  ]
+                }
+              ]
+            }
+          ],
+          "impact": {
+            "knockback": {
+              "customDirection": false,
+              "directionDegrees": 4
+            },
+            "hitstun": {
+              "enabled": true,
+              "hitActionName": ""
+            }
+          }
         },
         {
           "id": "move-forward-hand-2",
@@ -22,7 +54,18 @@
           "actionFile": "Anim_Combat_Att_F_Hand_2.glb",
           "actionName": "combat_Att_F_Hand_2",
           "weight": 23,
-          "strength": 1
+          "strength": 1,
+          "hitWindows": [],
+          "impact": {
+            "knockback": {
+              "customDirection": false,
+              "directionDegrees": 0
+            },
+            "hitstun": {
+              "enabled": false,
+              "hitActionName": ""
+            }
+          }
         }
       ]
     },
@@ -38,7 +81,18 @@
           "actionFile": "Anim_Combat_Att_LB_Hand_0.glb",
           "actionName": "combat_Att_LB_Hand_0",
           "weight": 100,
-          "strength": 1
+          "strength": 1,
+          "hitWindows": [],
+          "impact": {
+            "knockback": {
+              "customDirection": false,
+              "directionDegrees": 0
+            },
+            "hitstun": {
+              "enabled": false,
+              "hitActionName": ""
+            }
+          }
         }
       ]
     },
@@ -54,7 +108,18 @@
           "actionFile": "Anim_Combat_Att_RB_Hand_0.glb",
           "actionName": "combat_Att_RB_Hand_0",
           "weight": 100,
-          "strength": 1
+          "strength": 1,
+          "hitWindows": [],
+          "impact": {
+            "knockback": {
+              "customDirection": false,
+              "directionDegrees": 0
+            },
+            "hitstun": {
+              "enabled": false,
+              "hitActionName": ""
+            }
+          }
         }
       ]
     }
