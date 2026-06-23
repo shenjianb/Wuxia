@@ -4,6 +4,7 @@ export const COMBAT_MOVE_DIRECTIONS = [
   { id: "right", label: "右向", key: "D", inputCode: "KeyD" },
 ];
 
+export const DEFAULT_HITSTUN_DURATION = 0.3;
 export const COMBAT_MOVE_DIRECTION_IDS = COMBAT_MOVE_DIRECTIONS.map((direction) => direction.id);
 
 export const DEFAULT_COMBAT_MOVE_MANAGER = {
@@ -134,6 +135,7 @@ export function normalizeCombatMove(move = {}, fallbackDirection = "forward", in
     actionName,
     weight: normalizePositiveNumber(move.weight, 1),
     strength: normalizePositiveNumber(move.strength, 1),
+    blockable: move.blockable !== false,
     hitWindows: normalizeHitWindows(move.hitWindows),
     impact: normalizeMoveImpact(move.impact),
   };
@@ -148,6 +150,7 @@ export function createDefaultMoveImpact() {
     hitstun: {
       enabled: false,
       hitActionName: "",
+      duration: DEFAULT_HITSTUN_DURATION,
     },
   };
 }
@@ -214,6 +217,7 @@ export function normalizeMoveImpact(value = {}) {
     hitstun: {
       enabled: !!hitstun.enabled,
       hitActionName: String(hitstun.hitActionName || ""),
+      duration: normalizePositiveNumber(hitstun.duration, DEFAULT_HITSTUN_DURATION),
     },
   };
 }

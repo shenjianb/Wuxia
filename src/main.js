@@ -7,6 +7,7 @@ import { evaluateNpcBrain } from "./npc-ai-runtime.js";
 import {
   COMBAT_MOVE_DIRECTIONS,
   DEFAULT_COMBAT_MOVE_MANAGER,
+  DEFAULT_HITSTUN_DURATION,
   chooseWeightedCombatMove,
   getAllCombatMoves,
   getCombatMoveActionNames,
@@ -120,6 +121,8 @@ function createHitReactionState() {
     active: false,
     timer: 0,
     actionName: null,
+    fallbackActionName: null,
+    controlOnly: false,
     sourceId: null,
   };
 }
@@ -1791,12 +1794,17 @@ function applyCombatHit(hit) {
     );
   }
 
+  const hitstunDuration = normalizeRuntimeNonNegativeNumber(
+    hit.move.impact?.hitstun?.duration,
+    DEFAULT_HITSTUN_DURATION,
+  );
   const hitstunApplied = hit.strengthDelta > 0
     && hit.move.impact?.hitstun?.enabled
     && applyCharacterHitReaction(
       hit.target,
       hit.move.impact.hitstun.hitActionName,
       hit.attacker,
+      hitstunDuration,
     );
 
   const record = {
@@ -1810,6 +1818,7 @@ function applyCombatHit(hit) {
     strengthDelta: hit.strengthDelta,
     knockbackDistance,
     hitstunApplied,
+    hitstunDuration: hitstunApplied ? hitstunDuration : 0,
   };
   hit.attacker.lastCombatHitDealt = record;
   hit.target.lastCombatHit = record;
@@ -1831,18 +1840,24 @@ function applyCharacterKnockback(character, direction, distance) {
   character.root.updateMatrixWorld(true);
 }
 
-function applyCharacterHitReaction(character, actionName, sourceCharacter) {
-  const action = character?.actions?.[actionName];
-  const clip = animations[actionName];
-  if (!character || !action || !clip) return false;
+function applyCharacterHitReaction(character, actionName, sourceCharacter, duration = DEFAULT_HITSTUN_DURATION) {
+  const hitstunDuration = normalizeRuntimeNonNegativeNumber(duration, DEFAULT_HITSTUN_DURATION);
+  if (!character || hitstunDuration <= 0) return false;
+  const action = actionName ? character.actions?.[actionName] : null;
+  const clip = actionName ? animations[actionName] : null;
+  const hasHitAction = !!(action && clip);
 
   const attackState = getCharacterCombatAttackState(character);
   if (attackState?.active) cancelCharacterCombatAttack(attackState);
 
   character.hitReaction.active = true;
-  character.hitReaction.timer = Math.max(0.05, clip.duration);
-  character.hitReaction.actionName = actionName;
+  character.hitReaction.timer = hitstunDuration;
+  character.hitReaction.actionName = hasHitAction ? actionName : null;
+  character.hitReaction.fallbackActionName = null;
+  character.hitReaction.controlOnly = !hasHitAction;
   character.hitReaction.sourceId = getRuntimeCharacterId(sourceCharacter);
+
+  if (!hasHitAction) return true;
 
   action.enabled = true;
   action.paused = false;
@@ -1858,14 +1873,14 @@ function updateCharacterHitReaction(character, delta) {
   const reaction = character?.hitReaction;
   if (!reaction?.active) return false;
 
-  const action = character.actions?.[reaction.actionName];
-  if (!action) {
+  const action = reaction.actionName ? character.actions?.[reaction.actionName] : null;
+  if (reaction.actionName && !action) {
     clearCharacterHitReaction(character);
     return false;
   }
 
   reaction.timer = Math.max(0, reaction.timer - delta);
-  character.desiredAction = action;
+  if (action) character.desiredAction = action;
   if (character.actions.walk) character.actions.walk.timeScale = 1;
   if (character.actions.combatWalk) character.actions.combatWalk.timeScale = 1;
 
@@ -1879,6 +1894,8 @@ function clearCharacterHitReaction(character) {
   character.hitReaction.active = false;
   character.hitReaction.timer = 0;
   character.hitReaction.actionName = null;
+  character.hitReaction.fallbackActionName = null;
+  character.hitReaction.controlOnly = false;
   character.hitReaction.sourceId = null;
 }
 
@@ -2041,6 +2058,7 @@ function update(time) {
     const clip = animations[actionName];
     const config = motionConfig[actionName] || { motionMode: "InPlace" };
     const applyRootRotation = config.applyRootRotation !== false;
+    const controlOnlyHitReaction = character.hitReaction?.active && character.hitReaction.controlOnly;
 
     if (skeletonRoot && config.motionMode === "RootMotion" && clip) {
       const currTime = activeAction.time;
@@ -2075,7 +2093,7 @@ function update(time) {
       
       // 物理应用旋转与位移（在角色父级组级别）
       // 先将旋转增量从 Root 骨骼局部空间共轭变换到世界空间，然后提取 Yaw
-      if (applyRootRotation) {
+      if (applyRootRotation && !controlOnlyHitReaction) {
         character.root.updateMatrixWorld(true);
         const parentWorldQuat = new THREE.Quaternion().setFromRotationMatrix(character.scene.matrixWorld);
         const worldDeltaRot = new THREE.Quaternion()
@@ -2096,7 +2114,8 @@ function update(time) {
       const nextPos = character.root.position.clone().add(deltaPosWorld);
       
       // 碰撞判定检测
-      if (canMoveTo(nextPos)) {
+      const activeMove = getActiveRootMotionCombatMove(character, actionName);
+      if (!controlOnlyHitReaction && canMoveTo(nextPos) && canCombatRootMotionMoveTo(character, nextPos, activeMove)) {
         character.root.position.copy(nextPos);
       }
       
@@ -3260,6 +3279,47 @@ function canMoveTo(position) {
   );
   if (Math.abs(position.x) > WORLD_SIZE * TILE_SIZE || Math.abs(position.z) > WORLD_SIZE * TILE_SIZE) return false;
   return !obstacles.some((obstacle) => obstacle.intersectsBox(bounds));
+}
+
+function getActiveRootMotionCombatMove(character, actionName) {
+  const attackState = getCharacterCombatAttackState(character);
+  if (!attackState?.active || attackState.activeActionName !== actionName || !attackState.activeMoveId) return null;
+  return getRuntimeCombatMoveById(attackState.activeMoveId);
+}
+
+function canCombatRootMotionMoveTo(character, position, move) {
+  if (!move || move.blockable === false) return true;
+  return !isCharacterBaseBlockedAtPosition(character, position);
+}
+
+function isCharacterBaseBlockedAtPosition(character, position) {
+  const model = getRuntimeModelConfigForCharacter(character);
+  const collider = model?.baseCollider;
+  if (!collider || collider.enabled === false) return false;
+
+  const movingBox = createBaseColliderWorldBoxAtPosition(character, collider, position);
+  if (!movingBox) return false;
+
+  return getRuntimeCombatCharacters().some((other) => {
+    if (other === character) return false;
+    const otherModel = getRuntimeModelConfigForCharacter(other);
+    const otherCollider = otherModel?.baseCollider;
+    if (!otherCollider || otherCollider.enabled === false) return false;
+    const otherBox = createBaseColliderWorldBoxAtPosition(other, otherCollider, other.root.position);
+    return !!otherBox && movingBox.intersectsBox(otherBox);
+  });
+}
+
+function createBaseColliderWorldBoxAtPosition(character, collider, position) {
+  if (!character?.root || !collider || !position) return null;
+  const root = character.root;
+  const originalPosition = root.position.clone();
+  root.position.copy(position);
+  root.updateMatrixWorld(true);
+  const box = createColliderWorldBox(root, collider, "base");
+  root.position.copy(originalPosition);
+  root.updateMatrixWorld(true);
+  return box;
 }
 
 function getActionTransitionDuration(currentActionName, nextActionName) {

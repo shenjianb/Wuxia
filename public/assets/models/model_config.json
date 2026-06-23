@@ -30,32 +30,6 @@
       },
       "partColliders": [
         {
-          "id": "male-head",
-          "name": "头",
-          "bone": "Bip001_Head",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            0.1,
-            0
-          ],
-          "size": [
-            0.34,
-            0.36,
-            0.34
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
           "id": "male-torso",
           "name": "躯干",
           "bone": "Bip001_Spine1",
@@ -63,13 +37,13 @@
           "enabled": true,
           "offset": [
             0,
-            0.08,
+            0,
             0
           ],
           "size": [
-            0.66,
-            0.72,
-            0.52
+            12,
+            12,
+            12
           ],
           "rotationDegrees": [
             0,
@@ -135,99 +109,20 @@
           "strength": 0
         },
         {
-          "id": "male-right-upper-arm",
-          "name": "右大臂",
-          "bone": "Bip001_R_UpperArm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            -0.12,
-            0,
-            0
-          ],
-          "size": [
-            0.38,
-            0.2,
-            0.2
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "male-right-forearm",
-          "name": "右小臂",
-          "bone": "Bip001_R_Forearm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            -0.12,
-            0,
-            0
-          ],
-          "size": [
-            0.36,
-            0.18,
-            0.18
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt",
-            "attack"
-          ],
-          "strength": 0
-        },
-        {
           "id": "male-left-thigh",
           "name": "左大腿",
           "bone": "Bip001_L_Thigh",
           "shape": "box",
           "enabled": true,
           "offset": [
+            9,
             0,
-            -0.18,
             0
           ],
           "size": [
-            0.26,
-            0.52,
-            0.24
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "male-left-calf",
-          "name": "左小腿",
-          "bone": "Bip001_L_Calf",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            -0.18,
-            0
-          ],
-          "size": [
-            0.22,
-            0.5,
-            0.22
+            12,
+            12,
+            12
           ],
           "rotationDegrees": [
             0,
@@ -246,40 +141,14 @@
           "shape": "box",
           "enabled": true,
           "offset": [
+            9,
             0,
-            -0.18,
             0
           ],
           "size": [
-            0.26,
-            0.52,
-            0.24
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "male-right-calf",
-          "name": "右小腿",
-          "bone": "Bip001_R_Calf",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            -0.18,
-            0
-          ],
-          "size": [
-            0.22,
-            0.5,
-            0.22
+            12,
+            12,
+            12
           ],
           "rotationDegrees": [
             0,
@@ -298,14 +167,14 @@
           "shape": "box",
           "enabled": true,
           "offset": [
-            1.0367,
-            -0.1676,
-            1.0793
+            3,
+            0,
+            0
           ],
           "size": [
-            15.9453,
-            6.2589,
-            6.8401
+            14,
+            6,
+            6
           ],
           "rotationDegrees": [
             0,
@@ -314,6 +183,84 @@
           ],
           "channels": [
             "attack"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "male-l-hand",
+          "name": "左手",
+          "bone": "Bip001_L_Hand",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            3,
+            0,
+            0
+          ],
+          "size": [
+            14,
+            6,
+            6
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "attack"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "male-spine2",
+          "name": "上身",
+          "bone": "Bip001_Spine2",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            4,
+            0,
+            0
+          ],
+          "size": [
+            12,
+            12,
+            12
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "hurt"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "male-head-nub",
+          "name": "HeadNub",
+          "bone": "Bip001_HeadNub",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            0,
+            0.1,
+            0
+          ],
+          "size": [
+            12,
+            12,
+            12
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "hurt"
           ],
           "strength": 0
         }
@@ -355,204 +302,20 @@
       },
       "partColliders": [
         {
-          "id": "female-head",
-          "name": "头",
-          "bone": "Bip001_Head",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            0.1,
-            0
-          ],
-          "size": [
-            0.32,
-            0.35,
-            0.32
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-torso",
-          "name": "躯干",
-          "bone": "Bip001_Spine1",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            0.08,
-            0
-          ],
-          "size": [
-            8.6034,
-            10.3218,
-            14.9401
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-left-forearm",
-          "name": "左小臂",
-          "bone": "Bip001_L_Forearm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0.11,
-            0,
-            0
-          ],
-          "size": [
-            8.4657,
-            5.1658,
-            6.713
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt",
-            "attack"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-right-upper-arm",
-          "name": "右大臂",
-          "bone": "Bip001_R_UpperArm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            -0.11,
-            0,
-            0
-          ],
-          "size": [
-            0.34,
-            0.18,
-            0.18
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-right-forearm",
-          "name": "右小臂",
-          "bone": "Bip001_R_Forearm",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            -0.11,
-            0,
-            0
-          ],
-          "size": [
-            0.32,
-            0.16,
-            0.16
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt",
-            "attack"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-left-thigh",
-          "name": "左大腿",
-          "bone": "Bip001_L_Thigh",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            -0.17,
-            0
-          ],
-          "size": [
-            0.24,
-            0.5,
-            0.22
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
-          "id": "female-left-calf",
-          "name": "左小腿",
-          "bone": "Bip001_L_Calf",
-          "shape": "box",
-          "enabled": true,
-          "offset": [
-            0,
-            -0.17,
-            0
-          ],
-          "size": [
-            0.2,
-            0.48,
-            0.2
-          ],
-          "rotationDegrees": [
-            0,
-            0,
-            0
-          ],
-          "channels": [
-            "hurt"
-          ],
-          "strength": 0
-        },
-        {
           "id": "female-right-thigh",
           "name": "右大腿",
           "bone": "Bip001_R_Thigh",
           "shape": "box",
           "enabled": true,
           "offset": [
+            9,
             0,
-            -0.17,
             0
           ],
           "size": [
-            0.24,
-            0.5,
-            0.22
+            12,
+            12,
+            12
           ],
           "rotationDegrees": [
             0,
@@ -597,14 +360,14 @@
           "shape": "box",
           "enabled": true,
           "offset": [
-            4.4425,
-            -0.6621,
+            4,
+            0,
             0
           ],
           "size": [
-            6.882,
-            11.072,
-            14.8027
+            12,
+            12,
+            12
           ],
           "rotationDegrees": [
             0,
@@ -623,14 +386,14 @@
           "shape": "box",
           "enabled": true,
           "offset": [
-            1.0367,
-            -0.1676,
-            -1.0793
+            3,
+            0,
+            0
           ],
           "size": [
-            18.7723,
-            7.3277,
-            6.3553
+            14,
+            6,
+            6
           ],
           "rotationDegrees": [
             0,
@@ -649,14 +412,14 @@
           "shape": "box",
           "enabled": true,
           "offset": [
-            1.0367,
-            -0.1676,
-            1.0793
+            3,
+            0,
+            0
           ],
           "size": [
-            12.9779,
-            8.0735,
-            5.2623
+            14,
+            6,
+            6
           ],
           "rotationDegrees": [
             0,
@@ -665,6 +428,84 @@
           ],
           "channels": [
             "attack"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "female-l-thigh",
+          "name": "左大腿",
+          "bone": "Bip001_L_Thigh",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            9,
+            0,
+            0
+          ],
+          "size": [
+            12,
+            12,
+            12
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "hurt"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "female-spine1",
+          "name": "躯干",
+          "bone": "Bip001_Spine1",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            12,
+            12,
+            12
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "hurt"
+          ],
+          "strength": 0
+        },
+        {
+          "id": "female-head-nub",
+          "name": "HeadNub",
+          "bone": "Bip001_HeadNub",
+          "shape": "box",
+          "enabled": true,
+          "offset": [
+            0,
+            0.1,
+            0
+          ],
+          "size": [
+            12,
+            12,
+            12
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            0
+          ],
+          "channels": [
+            "hurt"
           ],
           "strength": 0
         }
