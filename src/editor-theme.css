@@ -1,0 +1,321 @@
+/* Shared editor chrome. Scene content and graph semantics keep their own colors. */
+body[data-editor-theme="codex"] {
+  color-scheme: dark;
+  background: #121212;
+  color: #ddd;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0;
+  scrollbar-color: #555 #191919;
+}
+
+body[data-editor-theme="codex"] *,
+body[data-editor-theme="codex"] *::before,
+body[data-editor-theme="codex"] *::after {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+
+body[data-editor-theme="codex"] :is(.editor-shell, .move-editor-shell, .graph-canvas) {
+  background: #121212;
+  min-width: 0;
+}
+
+body[data-editor-theme="codex"] :is(
+  .action-rail, .model-rail, .move-rail, .npc-rail, .behavior-rail, .scene-rail,
+  .property-panel, .graph-toolbar, .graph-footer, .toolbar-bar, .timeline-bar,
+  .timeline-panel, .panel-head, .mode-tabs, .panel-tabs, .bone-browser,
+  .context-menu, .light-dropdown, .brain-dock
+) {
+  background: #191919;
+  border-color: #333;
+  color: #ccc;
+  box-shadow: none;
+  min-width: 0;
+}
+
+body[data-editor-theme="codex"] :is(
+  .add-action-panel, .binding-card, .rule-card, .rule-card-header,
+  .rule-card-body, .profile-controls, .empty-state, .check-chip,
+  .check-row, .check-row label, .control-row.check-row label
+) {
+  background: #191919;
+  border-color: #333;
+  border-radius: 3px;
+  box-shadow: none;
+  color: #ccc;
+}
+
+body[data-editor-theme="codex"] :is(
+  h1, h2, h3, h4, strong, b, label, button, .control-row,
+  .control-row > span, .vector-row > span, .check-row > span,
+  .section-header span, .move-item-index, .action-mode
+) {
+  font-weight: 500;
+}
+
+body[data-editor-theme="codex"] :is(
+  .editor-brand strong, .field-group h2, .future-panel h2, .bone-browser h2,
+  .binding-headline h3, .panel-title h1, .section-header span,
+  .brain-dock-head strong, .brain-dock-empty strong, .direction-tab strong
+) {
+  color: #e0e0e0;
+  text-transform: none;
+}
+
+body[data-editor-theme="codex"] :is(
+  .editor-brand span, .panel-title span, .control-row label,
+  .control-row label span, .compact-field, .vector-row > span,
+  .check-row > span, .check-row label, .scene-meta, .toolbar-info,
+  .time-text, .action-mode, .move-item-index, .move-item-meta,
+  .move-item-main small, .manager-summary span, .direction-tab small,
+  .model-item b, .bone-item b, .check-chip small, .window-chip small,
+  .json-message, .readonly-line span, .readonly-line em, .inline-row span,
+  .inline-row strong, .mode-picker, .zoom-info, .graph-footer,
+  .brain-dock-head span, .brain-dock-empty span, .shortcut-hint
+) {
+  color: #aaa;
+  font-weight: 400;
+}
+
+body[data-editor-theme="codex"] :is(
+  .action-name, .scene-name, .npc-name, .model-item span, .layer-name,
+  .readout b, .context-menu-item
+) { color: #ddd; }
+
+body[data-editor-theme="codex"] :is(button, input, select, textarea) {
+  font-family: inherit;
+  font-weight: 400;
+  border-color: #333;
+  border-radius: 4px;
+  color: #ddd;
+  background: #222;
+  max-width: 100%;
+}
+
+body[data-editor-theme="codex"] button:not(.color-swatch) {
+  background: #222;
+  border-color: #333;
+  color: #ccc;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+body[data-editor-theme="codex"] button:not(.color-swatch):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: #303030;
+  border-color: #666;
+  color: #fff;
+}
+
+body[data-editor-theme="codex"] :is(
+  button.active, button.active-tool, button[aria-pressed="true"],
+  button[aria-selected="true"], .panel-tab.active, .tab-btn.active
+) {
+  background: #333;
+  border-color: #888;
+  color: #fff;
+}
+
+body[data-editor-theme="codex"] :is(button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid #ddd;
+  outline-offset: 2px;
+  border-color: #aaa;
+}
+
+body[data-editor-theme="codex"] :is(input, select, textarea):focus {
+  border-color: #888;
+}
+
+body[data-editor-theme="codex"] :is(button:disabled, [aria-disabled="true"], input:disabled, select:disabled) {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+body[data-editor-theme="codex"] :is(input, select, textarea) {
+  min-width: 0;
+  background: #121212;
+  accent-color: #bbb;
+}
+
+body[data-editor-theme="codex"] :is(input::placeholder, textarea::placeholder) { color: #888; }
+body[data-editor-theme="codex"] select option { color: #ddd; background: #222; }
+body[data-editor-theme="codex"] :is(
+  .control-row, .new-npc-row, .mode-picker, .profile-controls,
+  .condition-row, .output-row, .preview-field
+) :is(input:not([type="range"]):not([type="checkbox"]), select, textarea) {
+  background: #121212;
+  color: #ddd;
+  border-color: #333;
+}
+body[data-editor-theme="codex"] :is(.profile-box, .preview-slot, .preview-grid > div) {
+  background: #191919;
+  border-color: #333;
+  box-shadow: none;
+}
+body[data-editor-theme="codex"] :is(
+  .profile-head strong, .profile-head span, .rule-card-body h3,
+  .rule-card-header .rule-name, .rule-card-header .rule-toggle,
+  .preview-slot-header strong, .preview-slot-header span,
+  .preview-grid strong, .preview-grid span, .preview-field, .mini-note
+) { color: #bbb; font-weight: 400; }
+body[data-editor-theme="codex"] .graph-toolbar .tab-btn.active {
+  background: #333;
+  border-color: #888;
+  color: #fff;
+}
+body[data-editor-theme="codex"] input[type="checkbox"] { accent-color: #bbb; flex-shrink: 0; }
+body[data-editor-theme="codex"] input[type="range"] { accent-color: #bbb; background: transparent; }
+body[data-editor-theme="codex"] .range-row input[type="range"] { background: #444; }
+body[data-editor-theme="codex"] input[type="range"]::-webkit-slider-thumb { background: #bbb; border-color: #222; }
+body[data-editor-theme="codex"] input[type="range"]::-moz-range-thumb { background: #bbb; border-color: #222; }
+body[data-editor-theme="codex"] .interrupt-track { background: transparent; border-block: 15px solid #191919; }
+body[data-editor-theme="codex"] .interrupt-track::before { content: ""; position: absolute; inset: 0; background: #444; }
+body[data-editor-theme="codex"] .interrupt-selection { top: 0; background: #aaa; }
+body[data-editor-theme="codex"] .interrupt-track input[type="range"] { top: -15px; bottom: -15px; }
+
+body[data-editor-theme="codex"] :is(
+  .action-list, .model-list, .move-list, .npc-list, .scene-list, .bone-list
+) { gap: 2px; }
+
+body[data-editor-theme="codex"] :is(
+  .action-item, .model-item, .move-item, .npc-item, .scene-item,
+  .bone-item, .layer-item, .obj-list-item
+) {
+  background: transparent;
+  border-color: transparent;
+  border-bottom-color: #333;
+  border-radius: 0;
+  box-shadow: none;
+  min-width: 0;
+}
+
+body[data-editor-theme="codex"] :is(
+  .action-item, .model-item, .move-item, .npc-item, .scene-item, .bone-item,
+  .context-menu-item
+):hover { background: #292929; border-color: #444; }
+
+body[data-editor-theme="codex"] :is(
+  .action-item, .model-item, .move-item, .npc-item, .scene-item,
+  .bone-item, .obj-list-item
+).active { background: #303030; border-color: #666; }
+
+body[data-editor-theme="codex"] .obj-list-item.active button:first-child { background: #303030; }
+body[data-editor-theme="codex"] :is(.field-group + .field-group, .future-panel, .manager-summary) { border-color: #333; }
+body[data-editor-theme="codex"] .context-menu-divider { background: #333; }
+body[data-editor-theme="codex"] .behavior-node { background: #222; box-shadow: none; }
+body[data-editor-theme="codex"] .rule-card.selected { border-color: #888; }
+body[data-editor-theme="codex"] .color-swatch.selected { border-color: #eee; box-shadow: none; }
+body[data-editor-theme="codex"] .hit-timeline { background: #191919; border-color: #333; }
+body[data-editor-theme="codex"] .timeline-playhead { background: #eee; }
+
+body[data-editor-theme="codex"] button.editor-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  gap: 0;
+  line-height: 1;
+}
+
+body[data-editor-theme="codex"] :is(.editor-icon-button svg, svg.lucide, .editor-ui-icon) {
+  position: static;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  pointer-events: none;
+  stroke-width: 1.75;
+}
+
+body[data-editor-theme="codex"] :is(.status-pill, .status-pill.saved, .status-pill.dirty, .readout) {
+  background: #191919;
+  border-color: #444;
+  color: #bbb;
+  border-radius: 4px;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+body[data-editor-theme="codex"] .status-pill { top: 12px; left: 12px; right: auto; max-width: calc(100% - 24px); }
+body[data-editor-theme="codex"] :is(.preview-toggles, .viewport-toggles) { top: 56px; right: 12px; left: auto; }
+body[data-editor-theme="codex"] .transform-toolbar { top: 100px; right: 12px; }
+body[data-editor-theme="codex"] :is(.preview-toggles, .viewport-toggles, .transform-toolbar) { flex-wrap: wrap; gap: 6px; max-width: calc(100% - 24px); }
+body[data-editor-theme="codex"] .status-pill.bad { color: #ff9c9c; border-color: #8c4545; }
+body[data-editor-theme="codex"] .save-button.dirty { color: #fff; border-color: #aaa; background: #303030; }
+body[data-editor-theme="codex"] [data-dirty-indicator] { color: #ddd; font-size: 11px; white-space: nowrap; }
+body[data-editor-theme="codex"] [hidden] { display: none !important; }
+body[data-editor-theme="codex"] .panel-head:has([data-dirty-indicator]) { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+body[data-editor-theme="codex"] :is(.readout, .panel-title, .control-row, .field-scroll) { min-width: 0; }
+body[data-editor-theme="codex"] .readout { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 42%; overflow: auto; }
+body[data-editor-theme="codex"] .effective-rules[data-effective-rules] {
+  display: block;
+  grid-column: 1 / -1;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 10px;
+  padding: 8px 0;
+  color: #bbb;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+body[data-editor-theme="codex"] .effective-rules[data-effective-rules] b { white-space: normal; overflow: visible; font-size: inherit; font-weight: 400; }
+body[data-editor-theme="codex"] details.field-group { display: block; padding: 0 0 12px; border-color: #333; }
+body[data-editor-theme="codex"] details.field-group > summary { padding: 9px 0; color: #ccc; font-size: 12px; font-weight: 500; cursor: pointer; }
+body[data-editor-theme="codex"] details.field-group > summary::marker { color: #999; }
+body[data-editor-theme="codex"] details.field-group[open] > :not(summary) { margin-top: 10px; }
+
+body[data-editor-theme="codex"] :is(#editor-ui-tooltip, [role="tooltip"]) {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 9px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #222;
+  color: #eee;
+  box-shadow: 0 3px 12px #0006;
+  font: 400 12px/1.4 "Segoe UI", system-ui, sans-serif;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  html:has(body[data-editor-theme="codex"]) { height: auto; min-height: 100%; overflow-y: auto; overflow-x: clip; }
+  body[data-editor-theme="codex"] { height: auto; min-height: 100vh; overflow-y: auto; overflow-x: clip; }
+  body[data-editor-theme="codex"] :is(#editor-app, #model-editor-app, #move-manager-app, #npc-editor-app, #behavior-editor-app, #scene-editor-app) { height: auto; min-height: 100vh; }
+  body[data-editor-theme="codex"] :is(.editor-shell, .move-editor-shell) { height: auto; min-height: 100vh; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; overflow: visible; }
+  body[data-editor-theme="codex"] :is(.action-rail, .model-rail, .move-rail, .npc-rail, .behavior-rail, .scene-rail) { grid-template-rows: auto; overflow: visible; border-right: 0; border-bottom: 1px solid #333; }
+  body[data-editor-theme="codex"] :is(.action-list, .model-list, .move-list, .npc-list, .scene-list) { grid-auto-flow: row; grid-auto-columns: auto; max-height: 220px; overflow: auto; }
+  body[data-editor-theme="codex"] .move-rail { gap: 8px; padding: 12px; }
+  body[data-editor-theme="codex"] .move-rail .manager-summary { display: none; }
+  body[data-editor-theme="codex"] .move-rail .direction-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  body[data-editor-theme="codex"] .move-rail .direction-tab { min-height: 44px; padding: 5px 6px; gap: 2px; }
+  body[data-editor-theme="codex"] .move-rail .move-list { max-height: 120px; overflow: auto; }
+  body[data-editor-theme="codex"] .property-panel { overflow: visible; border-left: 0; border-top: 1px solid #333; }
+  body[data-editor-theme="codex"] .field-scroll { overflow: visible; }
+  body[data-editor-theme="codex"] .preview-column { min-height: 520px; grid-template-rows: minmax(400px, 60vh) auto; overflow: hidden; }
+  body[data-editor-theme="codex"] .graph-column { min-height: 600px; grid-template-rows: auto minmax(480px, 1fr) auto; }
+  body[data-editor-theme="codex"] :is(.graph-toolbar, .graph-footer, .toolbar-bar, .timeline-controls, .inline-actions, .btn-row, .panel-tabs) { display: flex; flex-wrap: wrap; gap: 6px; }
+  body[data-editor-theme="codex"] .timeline-bar { grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; padding: 10px 12px; }
+  body[data-editor-theme="codex"] .timeline-bar select { grid-column: 1 / -1; }
+  body[data-editor-theme="codex"] .timeline-bar .time-text { grid-column: 1 / -1; text-align: left; }
+  body[data-editor-theme="codex"] .timeline-controls .time-text { flex: 1 1 110px; }
+  body[data-editor-theme="codex"] .readout { right: 12px; bottom: 12px; max-width: calc(100% - 24px); padding: 8px; gap: 5px 10px; }
+  body[data-editor-theme="codex"] .direction-dial { bottom: 48%; left: 12px; width: 56px; height: 56px; }
+  body[data-editor-theme="codex"] .mode-picker { grid-template-columns: auto minmax(0, 1fr); max-width: 100%; }
+  body[data-editor-theme="codex"] .brain-dock { top: 60px; width: calc(100% - 24px); max-width: 390px; }
+  body[data-editor-theme="codex"] .light-dropdown { max-width: calc(100vw - 24px); flex-wrap: wrap; }
+  body[data-editor-theme="codex"] .layer-item { grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 4px; }
+  body[data-editor-theme="codex"] .layer-item select { width: 65px; }
+  body[data-editor-theme="codex"] .panel-title h1 { font-size: 16px; }
+}

@@ -1,68 +1,68 @@
 ---
 name: wuxia-web3d-animation
-description: Project-specific guide for D:\Wuxia_Web. Use when working on the three.js WebGPU demo's character animation framework, FBX-to-GLB asset pipeline, Mixamo animation clips, Root Motion versus In-Place movement, Root track filtering, foot/root debugging, or combat systems that need to plug into the current animation state machine.
+description: Project-specific guide for D:\Wuxia_Web. Use when working on the three.js WebGPU wuxia demo's animation framework, FBX-to-GLB pipeline, Root Motion versus In-Place movement, motion editor parity, combat move system, hit collision, model colliders, NPC combat behavior, or any feature that touches character movement/action state.
 ---
 
 # Wuxia Web3D Animation
 
-## Quick Start
+## Purpose
 
-Use this skill to get oriented before changing animation, movement, combat, or asset import code in `D:\Wuxia_Web`.
+Use this skill before changing animation, movement, combat, collision, NPC combat behavior, or FBX/GLB assets in `D:\Wuxia_Web`.
 
-First read:
+Read the current project map first:
 
-- `src/main.js`
-- `src/motion-editor.js`
-- `tools/build_glb_assets.py`
-- `public/assets/animations/motion_config.json`
+- [references/current-animation-framework.md](references/current-animation-framework.md)
 
-For the current project-specific map, read [references/current-animation-framework.md](references/current-animation-framework.md).
+Then inspect the relevant source files directly. This skill is an onboarding map, not a substitute for reading the current code.
 
-## Current Architecture
+## Invocation Guidance
 
-The demo uses Vite + `three/webgpu` with `WebGPURenderer`. The main runtime is `src/main.js`.
+Use this skill once at the start of a new conversation when the task touches animation, combat, Root Motion, FBX assets, model colliders, NPC behavior, or editor tooling.
 
-Assets are loaded as GLB:
+Do not invoke it for every message in the same conversation. After it has been loaded, continue normally unless the thread was compacted, the task switched to a different subsystem, or the user asks to refresh project context.
 
-- Models: `public/assets/models/SK_BaseMale.glb`, `SK_BaseFemale.glb`
-- Animations: separate GLBs under `public/assets/animations`
+For critical new threads, explicitly ask:
+
+```text
+Use $wuxia-web3d-animation and read the project-level skill before working on D:\Wuxia_Web.
+```
+
+Do not assume automatic loading is enough when the request is vague, such as "continue" or "fix this". Trigger-based loading may miss ambiguous prompts.
+
+## Core Files
+
+Start with these files depending on the task:
+
+- Runtime gameplay: `src/main.js`
+- Motion tuning: `src/motion-editor.js`
+- Combat move definitions: `src/combat-move-manager.js`, `public/assets/combat/move_manager.json`
+- Hit and hurt colliders: `src/combat-collision-utils.js`, `public/assets/models/model_config.json`
+- NPC runtime behavior: `src/npc-ai-runtime.js`, `src/npc-editor.js`, `public/assets/npcs`, `public/assets/behavior-trees`
+- Asset conversion: `tools/build_glb_assets.py`, `tools/merge_base_characters.py`
+- Dev APIs and editor persistence: `vite.config.js`
 - Motion config: `public/assets/animations/motion_config.json`
 
-The current model source should be the clean merged local FBX output, not Mixamo-exported skinned characters. Mixamo-exported skinned FBX was observed to corrupt skin/bind relationships for these models.
+## Asset Pipeline Rules
 
-## Animation Rules
+FBX source files live under:
 
-Preserve these conventions unless the user explicitly asks to experiment:
+```text
+D:\Wuxia_Web\FBX
+```
 
-- Use clean merged character meshes plus separate Mixamo animation GLBs.
-- Keep model GLBs animation-free.
-- Use `Anim_Normal_Idle2`, `Anim_Normal_Walk_F`, `Anim_Normal_Idle_Turn_L`, and `Anim_Normal_Idle_Turn_R` as the current base locomotion set.
-- Turn animations currently come from In-Place source FBX files: `Anim_Normal_Idle_Turn_L_In.fbx` and `Anim_Normal_Idle_Turn_R_In.fbx`.
-- Do not reintroduce hard-coded `gltf.scene.rotation.x = Math.PI / 2`; the current merged GLBs are already upright.
-- Keep cache busting through `ASSET_VERSION` when replacing GLB assets.
+Model GLBs are exported to:
 
-## Root Motion
+```text
+public/assets/models
+```
 
-The runtime supports both In-Place and Root Motion concepts:
+Animation GLBs are exported to:
 
-- In-Place: code controls world movement/turning while animation may retain de-trended Root sway for weight shift.
-- Root Motion: animation Root displacement/rotation can be extracted and applied to the outer character group.
+```text
+public/assets/animations
+```
 
-Root filtering is driven by `motion_config.json` and `filterAnimationTracks()` in `src/main.js`, not by blindly deleting every Root track. For In-Place clips, the project uses a Unity-like "Bake Into Pose" approach: remove linear Root drift while preserving useful oscillation/sway.
-
-The UI includes runtime controls for Root position/rotation pass/block and a motion mode toggle if present in the current code. The cyan cross marker follows the skeleton `Root` world position projected onto the ground so Root behavior can be inspected visually.
-
-## Motion Editor Parity
-
-Keep the motion editor and runtime animation-processing semantics identical. Runtime issues should be reproducible in `motion-editor` before they appear in gameplay.
-
-- When changing Root filtering, Bake Into Pose, Root Motion extraction, Root pose anchoring, Root pose rotation, foot locking, visual yaw, action timing, or `motion_config.json` semantics in `src/main.js`, mirror the same behavior in `src/motion-editor.js` or move the shared logic into a common helper.
-- Treat divergence as a bug: if gameplay shows a movement, facing, sliding, or grounding issue that the motion editor cannot show with the same clip/config, first compare editor/runtime action processing paths.
-- Validate risky animation changes in both places. The motion editor should be the first diagnostic surface for runtime foot contact, Root offsets, Root rotation, and mesh-versus-arrow alignment.
-
-## Build And Validate
-
-When source FBX files change, run:
+Run this after FBX changes:
 
 ```powershell
 cd D:\Wuxia_Web
@@ -70,42 +70,93 @@ npm run assets:glb
 npm run build
 ```
 
-If only JS/CSS changes, run:
+Use clean local merged character meshes as model sources. Do not use Mixamo-exported skinned character FBX as the final model source; this project previously observed skin/bind corruption after Mixamo export.
+
+## Runtime Rules
+
+The project separates three concepts:
+
+- Outer character group: `character.root`, used for world position, collision, facing marker, and gameplay movement.
+- Skeleton Root: `scene.getObjectByName("Root")`, used by animation tracks and Root pose visualization.
+- Clip config: `motion_config.json`, used to decide In-Place, Root Motion, bake settings, Root pose rotation, code movement, and foot lock behavior.
+
+Preserve these rules:
+
+- Keep model GLBs animation-free.
+- Keep animation GLBs separate.
+- Keep `src/main.js` and `src/motion-editor.js` behavior aligned for Root filtering, Bake Into Pose, Root Motion extraction, Root pose anchoring, Root pose rotation, and foot lock.
+- Do not reintroduce hard-coded model axis fixes like `gltf.scene.rotation.x = Math.PI / 2`; current merged GLBs are expected to be upright.
+- Bump `ASSET_VERSION` when browser cache might hide changed GLBs/config.
+
+## Motion Config Rules
+
+Each action name used by runtime should have a matching `motion_config.json` entry.
+
+Important config fields include:
+
+- `motionMode`: `InPlace` or `RootMotion`.
+- `loop`: false for one-shot attacks and hit reactions.
+- `bakeIntoPoseXZ`, `bakeIntoPoseY`, `bakeIntoPoseRotation`: de-trend Root tracks for In-Place clips.
+- `rootSwayScale`: scales preserved Root sway after drift removal.
+- `codeMoveSpeed`, `codeMoveBasis`, `codeMoveYawOffsetDegrees`: code-driven movement controls.
+- `applyRootRotation`: whether Root Motion rotates the outer character.
+- `rootPoseRotation`, `rootPoseRotationAnchor`, `rootPoseRotationScale`: visible skeleton Root pose rotation controls.
+- `rootMotionMoveBasis`, `rootMotionForwardOnly`: physical Root Motion projection controls.
+- `footLock`, `footLockContactY`, `footLockReleaseY`: foot stabilization controls.
+- `visualYawOffsetDegrees`: mesh-facing correction relative to the outer character/facing marker.
+
+Avoid applying code movement and physical Root Motion to the same axis/action unless that is the explicit experiment.
+
+## Combat Integration Rules
+
+Combat actions are data-driven through the combat move manager.
+
+When adding an attack:
+
+1. Add/convert the FBX in `tools/build_glb_assets.py`.
+2. Ensure the GLB appears in `public/assets/animations`.
+3. Add or edit the action config in `motion_config.json`.
+4. Add or edit move data in `public/assets/combat/move_manager.json`.
+5. Configure hit windows and collider bindings through the move manager/model collider data.
+6. Verify in the runtime and in `motion-editor` for Root/motion behavior.
+
+Current attack routing uses direction intents from `COMBAT_MOVE_DIRECTIONS`:
+
+- Forward: `KeyW`
+- Left: `KeyA`
+- Right: `KeyD`
+
+Do not hard-code a new attack only in `src/main.js` if it belongs in move manager data.
+
+## Debugging Rules
+
+Use the project debug surfaces:
+
+- Cyan Root marker: skeleton `Root` world X/Z projected to the ground.
+- Facing marker: outer `character.root` direction.
+- `window.__DEMO_STATE`: runtime state, Root/motion/debug data.
+- Motion editor root trail/readout: compare with runtime when tuning clips.
+- Combat collider debug UI: inspect hit boxes and recent hits.
+
+If the mesh jumps but the facing marker does not, suspect skeleton Root pose anchoring, filtered Root tracks, or action blend state before changing world movement.
+
+If a character lies sideways or becomes tiny, suspect axis conversion, model normalization, or Root rest-pose reset.
+
+If Blender shows stretched arms after importing a Mixamo-exported skinned FBX, do not repair the runtime first; verify the source skin/bind relationship.
+
+## Validation
+
+For JS/CSS/config-only changes:
 
 ```powershell
 npm run build
 ```
 
-Use existing project scripts such as `tools/check_page.mjs` for browser sanity checks when appropriate. Headless WebGPU screenshots may appear black even when runtime state is healthy; rely on `window.__DEMO_READY`, `window.__DEMO_ERROR`, and debug state as the primary automated check.
+For asset pipeline changes:
 
-## Combat Integration Guidance
+```powershell
+npm run assets:glb
+npm run build
+```
 
-For combat work, build on the current animation action map instead of replacing it wholesale:
-
-- Add clips to `ASSETS.animations`, `loadAnimations()`, `createCharacterActions()`, and `motion_config.json`.
-- Treat combat as a state layer over locomotion: idle, walk, turn, attack, hit, dodge, dead.
-- Decide per action whether it is In-Place or Root Motion before implementing hit movement.
-- Keep movement authority clear: either code moves the outer character group, or Root Motion extraction does. Avoid applying both for the same axis/action.
-- Keep Root marker and motion toggles available while tuning attacks.
-
-Current combat locomotion conventions:
-
-- `Tab` toggles normal/combat. Combat locomotion maps to `combatIdle`, `combatWalk`, `combatTurnLeft`, and `combatTurnRight`.
-- Current combat clips are `Anim_Combat_Idle_Hand`, `Anim_Combat_Walk_Short_F_Hand`, `Anim_Combat_Idle_Turn_L_Hand`, and `Anim_Combat_Idle_Turn_R_Hand`.
-- `combatIdle` uses `visualYawOffsetDegrees: -50` to align the visible combat stance with the outer character facing arrow. Do not flip this sign based only on offline foot/toe sampling; verify against the in-app facing arrow.
-- The yellow-green facing arrow represents the outer `player.root` direction. If the arrow does not jump but the mesh jumps, debug skeleton `Root` local pose/action blending, not world movement or collision.
-
-Combat Root Motion rules:
-
-- For combat walk, prefer `motionMode: "RootMotion"` with `rootMotionMoveBasis: "clipRootDelta"` so the animation's own small-step lateral Root delta is preserved. Use `rootMotionForwardOnly: true` only to clamp tiny negative forward rebound, not to project all movement onto a straight forward vector.
-- Keep `applyRootRotation: false` for combat walk when the animation Root yaw should not rotate the outer character/arrow.
-- Separate physical Root Motion from visible Root pose. Extract outer movement from the unblended source clip `Root.position`, not from the mixed runtime skeleton `Root`, because idle/walk fade blending contaminates the delta.
-- On action switch into RootMotion, capture the current skeleton `Root.position` as a pose anchor. Display Root XZ as `poseAnchor + detrendedRootPose(t) - detrendedRootPose(0)` so walk/idle Root first-frame offset differences do not make the mesh jump while the arrow stays still. Do not anchor Root Y to idle/rest; preserve the action's own detrended Root Y or combat walk feet will float.
-- Preserve Root pose rotation separately from physical rotation. `applyRootRotation: false` should block only outer-character rotation. If the clip needs weight-shift rotation, use config like `rootPoseRotation: true` and `rootPoseRotationScale: 1` and apply the clip Root quaternion delta to the skeleton pose. If removing the clip's first-frame Root quaternion breaks foot grounding, set `rootPoseRotationAnchor: "clipStart"` and make both runtime and `motion-editor` honor it.
-- When leaving RootMotion for an In-Place combat idle, use a short blend-out/cooldown for skeleton Root pose and foot lock. Blend Root rotation toward the next action's configured Root pose, not blindly toward model rest; if the next In-Place action has `bakeIntoPoseRotation: false`, its Root quaternion track is the target. Do not let foot-lock anchors bind during the RootMotion-to-idle transition.
-
-Combat tuning and diagnostics:
-
-- `codeMoveSpeed` is an action-level movement/timing knob. For RootMotion actions it should influence action `timeScale`, not add code-driven position on top of RootMotion.
-- Keep debug state fields for `combatMode`, `desiredAction/currentAction`, `motionMode`, `rootMotionMoveBasis`, `rootMotionForwardOnly`, `codeMoveSpeed`, foot-lock anchors/cooldown, visual yaw, and Root pose anchors when tuning.
-- If pressing Space causes a tiny jump to one side and releasing Space jumps back while the facing arrow stays still, suspect skeleton `Root` pose anchoring or filtered Root tracks before changing world movement direction.
+Headless WebGPU screenshots may be black even when the app works. Prefer runtime debug state, browser console errors, and direct in-app inspection.

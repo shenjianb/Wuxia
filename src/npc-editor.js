@@ -11,6 +11,8 @@ import {
   getDefaultAttributes,
 } from "./character-attributes.js";
 import "./npc-editor.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
 
 const ASSET_VERSION = "npc-editor-20260530-01";
 const assetUrl = (p) => `${p}?v=${ASSET_VERSION}`;
@@ -58,6 +60,7 @@ boot();
 
 async function boot() {
   mountUI();
+  initializeEditorUi();
   bindUI();
 
   try {
@@ -88,7 +91,7 @@ function mountUI() {
         </div>
         <div class="new-npc-row">
           <input data-new-npc-id type="text" placeholder="新建 NPC ID..." />
-          <button data-new-npc type="button">新建</button>
+          <button data-new-npc data-icon="plus" data-label="新建 NPC" aria-label="新建 NPC" title="新建 NPC" type="button">新建</button>
         </div>
         <div class="npc-list" data-npc-list></div>
       </aside>
@@ -97,9 +100,9 @@ function mountUI() {
         <section class="preview-stage" data-viewport>
           <div class="status-pill" data-status>准备中...</div>
           <div class="preview-toggles">
-            <button class="toggle-button active" type="button" data-toggle-ground>地面</button>
-            <button class="toggle-button active" type="button" data-toggle-grid>网格</button>
-            <button class="toggle-button" type="button" data-toggle-skeleton>骨骼</button>
+            <button class="toggle-button active" type="button" data-toggle-ground data-icon="square" data-label="地面" aria-label="地面" title="地面" aria-pressed="true">地面</button>
+            <button class="toggle-button active" type="button" data-toggle-grid data-icon="grid-2x2" data-label="网格" aria-label="网格" title="网格" aria-pressed="true">网格</button>
+            <button class="toggle-button" type="button" data-toggle-skeleton data-icon="bone" data-label="骨骼" aria-label="骨骼" title="骨骼" aria-pressed="false">骨骼</button>
           </div>
         </section>
         <div class="toolbar-bar">
@@ -113,7 +116,7 @@ function mountUI() {
             <h1 data-panel-title>NPC 属性</h1>
             <span data-panel-subtitle>选择一个 NPC 或创建新的</span>
           </div>
-          <button class="save-button" data-save type="button">保存</button>
+          <button class="save-button" data-save data-icon="save" data-label="保存" aria-label="保存" title="保存" type="button">保存</button>
         </div>
         <div class="field-scroll" data-field-scroll></div>
       </aside>
@@ -281,6 +284,9 @@ function setDirty(dirty) {
 function updateSaveButton() {
   refs.saveBtn.classList.toggle("dirty", editor.dirty);
   refs.saveBtn.textContent = editor.dirty ? "保存*" : "保存";
+  refs.saveBtn.dataset.label = editor.dirty ? "保存（未保存更改）" : "保存";
+  refs.saveBtn.setAttribute("aria-label", refs.saveBtn.dataset.label);
+  refs.saveBtn.title = refs.saveBtn.dataset.label;
 }
 
 function updateToolbarInfo() {
@@ -296,14 +302,17 @@ function togglePreviewLayer(layer) {
   if (layer === "ground") {
     editor.showGround = !editor.showGround;
     refs.toggleGround.classList.toggle("active", editor.showGround);
+    refs.toggleGround.setAttribute("aria-pressed", String(editor.showGround));
     if (previewGround) previewGround.visible = editor.showGround;
   } else if (layer === "grid") {
     editor.showGrid = !editor.showGrid;
     refs.toggleGrid.classList.toggle("active", editor.showGrid);
+    refs.toggleGrid.setAttribute("aria-pressed", String(editor.showGrid));
     if (previewGrid) previewGrid.visible = editor.showGrid;
   } else if (layer === "skeleton") {
     editor.showSkeleton = !editor.showSkeleton;
     refs.toggleSkeleton.classList.toggle("active", editor.showSkeleton);
+    refs.toggleSkeleton.setAttribute("aria-pressed", String(editor.showSkeleton));
     updateSkeletonVisibility();
   }
 }
@@ -349,6 +358,10 @@ function renderNpcList(npcs) {
     const delBtn = document.createElement("button");
     delBtn.className = "delete-npc-button";
     delBtn.textContent = "删除";
+    delBtn.dataset.icon = "trash-2";
+    delBtn.dataset.label = `删除 NPC ${npc.name || npc.id}`;
+    delBtn.setAttribute("aria-label", delBtn.dataset.label);
+    delBtn.title = delBtn.dataset.label;
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       deleteNpc(npc.id);
@@ -841,6 +854,10 @@ function createBehaviorTreeSection() {
   refreshBtn.type = "button";
   refreshBtn.className = "btn-add";
   refreshBtn.textContent = "刷新";
+  refreshBtn.dataset.icon = "refresh-cw";
+  refreshBtn.dataset.label = "刷新行为树列表";
+  refreshBtn.setAttribute("aria-label", refreshBtn.dataset.label);
+  refreshBtn.title = refreshBtn.dataset.label;
   refreshBtn.style.width = "50px";
   refreshBtn.addEventListener("click", () => loadBehaviorTreeOptions(select));
   selectRow.appendChild(refreshBtn);

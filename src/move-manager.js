@@ -4,6 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createFacingMarker } from "./facing-marker.js";
 import * as combatCollision from "./combat-collision-utils.js";
+import { RELATIVE_DIRECTIONS, normalizeInterruptWindow } from "./combat-controls.js";
 import {
   COMBAT_MOVE_DIRECTIONS,
   DEFAULT_HITSTUN_DURATION,
@@ -15,7 +16,16 @@ import {
   normalizeCombatMove,
   normalizeCombatMoveManager,
 } from "./combat-move-manager.js";
+import {
+  applyPreviewPose as applySharedPreviewPose,
+  filterAnimationTracks,
+  computeAnimNaturalSpeed,
+  getPlaybackScale,
+  getPlaybackPolicy,
+} from "./animation-motion.js";
 import "./move-manager.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
 
 const ASSET_VERSION = "move-manager-20260619-visual";
 const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
@@ -28,6 +38,7 @@ const MODELS = [
 const MODEL_IDS = new Set(MODELS.map((model) => model.id));
 const loader = new GLTFLoader();
 const clock = new THREE.Clock();
+const lastPreviewFollowPosition = new THREE.Vector3();
 const scratch = new THREE.Vector3();
 let renderer, scene, camera, controls, ground, grid, facingMarker, knockbackMarker;
 let activeCharacter = null;
@@ -64,7 +75,7 @@ window.__MOVE_MANAGER_STATE = null;
 boot();
 
 async function boot() {
-  mountUi(); bindUi();
+  mountUi(); initializeEditorUi(); bindUi();
   try {
     setStatus("加载配置...");
     editor.motionConfig = await loadMotionConfig();
@@ -119,13 +130,160 @@ async function loadCombatMoveManager() { try { const r = await fetch("/api/comba
 async function loadModelConfig() { try { const r = await fetch("/api/model-config", { cache: "no-store" }); if (r.ok) return r.json(); } catch {} const r = await fetch(assetUrl("./assets/models/model_config.json"), { cache: "no-store" }); return r.ok ? r.json() : { models: {} }; }
 function buildActionOptions(files, config) { const options = files.filter((file) => file?.toLowerCase().endsWith(".glb")).map((fileName) => ({ fileName, actionName: findActionNameForAnimationFile(fileName, config) })); Object.keys(config).forEach((actionName) => { if (actionName.startsWith("combat_Att") && !options.some((option) => option.actionName === actionName)) options.push({ actionName, fileName: inferAnimationFileForActionName(actionName, files, config) || `Anim_${actionName.charAt(0).toUpperCase()}${actionName.slice(1)}.glb` }); }); return options.filter((option) => option.actionName).sort((a, b) => a.actionName.localeCompare(b.actionName)); }
 async function initRenderer() { renderer = await createSafeRenderer(THREE, { antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(refs.viewport.clientWidth, refs.viewport.clientHeight); refs.viewport.appendChild(renderer.domElement); scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0d0f); camera = new THREE.PerspectiveCamera(42, 1, 0.05, 80); camera.position.set(3.4, 2.2, 4.2); controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 1.05, 0); controls.enableDamping = true; scene.add(new THREE.HemisphereLight(0xf4efe6, 0x1a201b, 2.5)); const light = new THREE.DirectionalLight(0xffe1a8, 4.5); light.position.set(3, 5, 4); scene.add(light); grid = new THREE.GridHelper(8, 40, 0x5de5d9, 0x26362f); grid.material.transparent = true; grid.material.opacity = 0.36; scene.add(grid); ground = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ color: 0x111610, transparent: true, opacity: 0.68, side: THREE.DoubleSide })); ground.rotation.x = -Math.PI / 2; scene.add(ground); facingMarker = createFacingMarker(THREE, { renderOrder: 12 }); scene.add(facingMarker); knockbackMarker = createKnockbackMarker(); scene.add(knockbackMarker); resize(); }
-async function loadCharacters() { for (const model of MODELS) { const gltf = await loader.loadAsync(model.url); const root = new THREE.Group(); root.visible = false; root.add(gltf.scene); normalizeModel(gltf.scene); const skeletonOverlay = createSkeletonOverlay(gltf.scene); scene.add(skeletonOverlay.group); scene.add(root); characters.set(model.id, { model, modelConfigId: model.id, root, scene: gltf.scene, mixer: new THREE.AnimationMixer(gltf.scene), sceneRestRotationY: gltf.scene.rotation.y, skeletonOverlay, attackMeshes: [] }); } }
+async function loadCharacters() {
+  for (const model of MODELS) {
+    const gltf = await loader.loadAsync(model.url);
+    const root = new THREE.Group();
+    root.visible = false;
+    root.rotation.y = PREVIEW_BASE_YAW;
+    root.add(gltf.scene);
+    normalizeModel(gltf.scene);
+    const skeletonRoot = gltf.scene.getObjectByName("Root");
+    const skeletonOverlay = createSkeletonOverlay(gltf.scene);
+    scene.add(skeletonOverlay.group, root);
+    characters.set(model.id, {
+      model, modelConfigId: model.id, root, scene: gltf.scene,
+      mixer: new THREE.AnimationMixer(gltf.scene),
+      sceneRestRotationY: gltf.scene.rotation.y,
+      restModel: captureRestModel(gltf.scene),
+      rootRestPosition: skeletonRoot?.position.clone() ?? new THREE.Vector3(),
+      rootRestQuaternion: skeletonRoot?.quaternion.clone() ?? new THREE.Quaternion(),
+      skeletonOverlay, attackMeshes: [],
+    });
+  }
+}
 function normalizeModel(model) { const box = new THREE.Box3().setFromObject(model); const size = box.getSize(new THREE.Vector3()); model.scale.multiplyScalar(CHARACTER_HEIGHT / Math.max(size.y, 0.001)); const scaledBox = new THREE.Box3().setFromObject(model); const center = scaledBox.getCenter(new THREE.Vector3()); model.position.x -= center.x; model.position.z -= center.z; model.position.y -= scaledBox.min.y; }
-function selectModel(modelId, render = true) { editor.selectedModelId = MODEL_IDS.has(modelId) ? modelId : MODELS[0].id; characters.forEach((character) => { const active = character.model.id === editor.selectedModelId; character.root.visible = active; if (character.skeletonOverlay) character.skeletonOverlay.group.visible = active && editor.showSkeleton; }); activeCharacter = characters.get(editor.selectedModelId) || null; refs.modelSelect.value = editor.selectedModelId; rebuildAttackMeshes(); if (render) applyPose(); }async function loadSelectedMovePreview() { const move = selectedMove(); if (!move || !activeCharacter || !move.actionName) return; setStatus("加载动作..."); const token = Date.now(); loadSelectedMovePreview.token = token; const clip = await loadClip(move.actionName, move.actionFile); if (loadSelectedMovePreview.token !== token) return; activeClip = clip; activeCharacter.mixer.stopAllAction(); activeAction = activeCharacter.mixer.clipAction(clip); preparePreviewAction(); editor.duration = Math.max(0, clip.duration || 0); editor.time = 0; editor.playing = true; rebuildAttackMeshes(); renderTimeline(); renderPropertyPanel(); applyPose(); updatePlayButton(); setStatus("预览就绪", editor.dirty ? "dirty" : "saved"); }
-async function loadClip(actionName, explicitFile = "") { if (animations.has(actionName)) return animations.get(actionName); const option = editor.actionOptions.find((item) => item.actionName === actionName); const fileName = explicitFile || option?.fileName || inferAnimationFileForActionName(actionName, editor.animationFiles, editor.motionConfig); if (!fileName) throw new Error(`未找到动作文件：${actionName}`); const gltf = await loader.loadAsync(assetUrl(`./assets/animations/${fileName}`)); const clip = gltf.animations.length === 1 ? gltf.animations[0].clone() : new THREE.AnimationClip(actionName, -1, gltf.animations.flatMap((item) => item.tracks.map((track) => track.clone()))); clip.name = actionName; animations.set(actionName, clip); return clip; }
+function selectModel(modelId, render = true) { editor.selectedModelId = MODEL_IDS.has(modelId) ? modelId : MODELS[0].id; characters.forEach((character) => { const active = character.model.id === editor.selectedModelId; character.root.visible = active; if (character.skeletonOverlay) character.skeletonOverlay.group.visible = active && editor.showSkeleton; }); activeCharacter = characters.get(editor.selectedModelId) || null; refs.modelSelect.value = editor.selectedModelId; rebuildPreviewAction(); rebuildAttackMeshes(); if (render) applyPose(); }
+async function loadSelectedMovePreview() {
+  const token = Symbol();
+  loadSelectedMovePreview.token = token;
+  const move = selectedMove();
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
+  activeAction = null; activeClip = null;
+  editor.duration = 0;
+  if (!move || !activeCharacter || !move.actionName) {
+    activeAction?.stop(); activeAction = null; activeClip = null;
+    editor.duration = 0; editor.time = 0; editor.playing = false;
+    rebuildAttackMeshes(); renderTimeline(); updateTimelineUi(); updateReadout(); updatePlayButton();
+    if (knockbackMarker) knockbackMarker.visible = false;
+    return;
+  }
+  try {
+    setStatus("加载动作...");
+    const clip = await loadClip(move.actionName, move.actionFile);
+    if (loadSelectedMovePreview.token !== token) return;
+    activeClip = clip;
+    rebuildPreviewAction();
+    editor.duration = Math.max(0, clip.duration || 0); editor.time = 0; editor.playing = true;
+    rebuildAttackMeshes(); renderTimeline(); renderPropertyPanel(); applyPose(); updatePlayButton();
+    setStatus("预览就绪", editor.dirty ? "dirty" : "saved");
+  } catch (error) {
+    if (loadSelectedMovePreview.token !== token) return;
+    activeAction?.stop(); activeAction = null; activeClip = null;
+    editor.playing = false; editor.duration = 0; editor.time = 0;
+    updatePlayButton(); updateTimelineUi(); updateReadout();
+    setStatus(`动作加载失败：${error.message}`, "bad");
+  }
+}
+async function loadClip(actionName, explicitFile = "") {
+  const option = editor.actionOptions.find((item) => item.actionName === actionName);
+  const fileName = explicitFile || option?.fileName || inferAnimationFileForActionName(actionName, editor.animationFiles, editor.motionConfig);
+  if (!fileName) throw new Error(`未找到动作文件：${actionName}`);
+  const key = JSON.stringify([fileName, actionName]);
+  if (!animations.has(key)) {
+    const pending = loader.loadAsync(assetUrl(`./assets/animations/${fileName}`)).then((gltf) => {
+      const clip = gltf.animations.length === 1 ? gltf.animations[0].clone() : new THREE.AnimationClip(actionName, -1, gltf.animations.flatMap((item) => item.tracks.map((track) => track.clone())));
+      clip.name = actionName;
+      return clip;
+    });
+    animations.set(key, pending);
+    pending.catch(() => { if (animations.get(key) === pending) animations.delete(key); });
+  }
+  return animations.get(key);
+}
+
+function rebuildPreviewAction() {
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
+  activeAction = null;
+  if (!activeCharacter || !activeClip) return;
+  const filtered = filterAnimationTracks(activeClip, activeCharacter.restModel, editor.motionConfig[selectedMove()?.actionName]);
+  activeCharacter.mixer.stopAllAction();
+  activeAction = activeCharacter.mixer.clipAction(filtered);
+  preparePreviewAction();
+}
+
+function captureRestModel(model) {
+  const nodes = new Map();
+  model.traverse((node) => nodes.set(node.name, { position: node.position.clone() }));
+  return { getObjectByName: (name) => nodes.get(name) };
+}
+
+function getPreviewPlaybackScale() {
+  if (!activeClip || !activeCharacter) return 1;
+  const actionName = selectedMove()?.actionName;
+  if (actionName !== "walk" && actionName !== "combatWalk") return 1;
+  const config = currentConfig();
+  const speed = Number(config.codeMoveSpeed);
+  if (config.motionMode === "RootMotion" && !(Number.isFinite(speed) && speed >= 0)) return 1;
+  return getPlaybackScale(config, computeAnimNaturalSpeed(activeClip, activeCharacter), { min: 0 });
+}
+
+function getPreviewPoseMetrics() {
+  if (!activeCharacter || !activeAction || !activeClip) return null;
+  const skeletonRoot = activeCharacter.scene.getObjectByName("Root");
+  const hand = activeCharacter.scene.getObjectByName("Bip001_R_Hand");
+  const leftHand = activeCharacter.scene.getObjectByName("Bip001_L_Hand");
+  return {
+    modelId: activeCharacter.model.id,
+    actionName: activeAction.getClip().name,
+    rootPosition: activeCharacter.root.position.toArray(),
+    rootQuaternion: activeCharacter.root.quaternion.toArray(),
+    skeletonRootPosition: skeletonRoot?.position.toArray() ?? null,
+    skeletonRootQuaternion: skeletonRoot?.quaternion.toArray() ?? null,
+    handWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    leftHandWorldPosition: leftHand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    rightHandWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    playbackRate: getPreviewPlaybackScale(),
+    playbackPolicy: {
+      codeMovement: selectedMove()?.actionName === "walk" || selectedMove()?.actionName === "combatWalk",
+      previewLoop: previewShouldLoop(),
+      configuredLoop: currentConfig().loop ?? null,
+      baseYaw: PREVIEW_BASE_YAW,
+    },
+  };
+}
+
 function renderAll() { renderModelSelect(); renderDirectionTabs(); renderMoveList(); renderSummary(); renderPropertyPanel(); renderTimeline(); updateToggles(); updatePlayButton(); updateDebugState(); }
 function renderModelSelect() { refs.modelSelect.innerHTML = MODELS.map((model) => `<option value="${esc(model.id)}" ${model.id === editor.selectedModelId ? "selected" : ""}>${html(model.label)} · ${model.id}</option>`).join(""); }
-function renderDirectionTabs() { refs.tabs.innerHTML = ""; COMBAT_MOVE_DIRECTIONS.forEach((direction) => { const moves = editor.manager?.directions?.[direction.id]?.moves || []; const button = document.createElement("button"); button.type = "button"; button.className = "direction-tab"; button.classList.toggle("active", editor.selectedDirection === direction.id); button.innerHTML = `<span>${html(direction.label)}</span><strong>${direction.key}</strong><small>${moves.length} 招</small>`; button.addEventListener("click", () => { editor.selectedDirection = direction.id; ensureSelection(true); renderAll(); loadSelectedMovePreview(); }); refs.tabs.appendChild(button); }); }
+function renderDirectionTabs() {
+  refs.tabs.innerHTML = "";
+  COMBAT_MOVE_DIRECTIONS.forEach((direction) => {
+    const moves = editor.manager?.directions?.[direction.id]?.moves || [];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "direction-tab";
+    button.title = `身体相对方向：${direction.label}`;
+    button.classList.toggle("active", editor.selectedDirection === direction.id);
+    button.innerHTML = `<span>${html(direction.label)}</span><small>${moves.length} 招</small>`;
+    button.addEventListener("click", () => { editor.selectedDirection = direction.id; ensureSelection(true); renderAll(); loadSelectedMovePreview(); });
+    refs.tabs.appendChild(button);
+  });
+  const direction = editor.manager?.directions?.[editor.selectedDirection];
+  if (!direction) return;
+  const field = selectField("方向缺省招式", direction.defaultMoveId || "", [
+    { value: "", label: "列表首个可用招式" },
+    ...currentMoves().map((move) => ({ value: move.id, label: move.name })),
+  ], (value) => { direction.defaultMoveId = value; markDirty(); });
+  field.style.gridColumn = "1 / -1";
+  refs.tabs.append(field);
+  if (!currentMoves().some((move) => move.actionName)) {
+    const notice = warning("此方向缺少可用招式，仅显示攻击方向，无动画或命中判定");
+    notice.style.gridColumn = "1 / -1";
+    refs.tabs.append(notice);
+  }
+}
 function renderMoveList() { refs.moveList.innerHTML = ""; const moves = currentMoves(); if (!moves.length) { refs.moveList.innerHTML = `<div class="empty-state">当前方向没有招式</div>`; return; } moves.forEach((move, index) => { const item = document.createElement("button"); item.type = "button"; item.className = "move-item"; item.classList.toggle("active", move.id === editor.selectedMoveId); item.innerHTML = `<span class="move-item-index">${index + 1}</span><span class="move-item-main"><b>${html(move.name)}</b><small>${html(move.actionName || "未绑定动作")}</small></span><span class="move-item-meta">${fmt(move.weight, 0)} 权重</span><span class="move-item-meta">${move.hitWindows?.length || 0} 段</span>`; item.addEventListener("click", () => selectMove(move.id)); refs.moveList.appendChild(item); }); }
 function renderSummary() { refs.summary.innerHTML = COMBAT_MOVE_DIRECTIONS.map((direction) => { const moves = editor.manager?.directions?.[direction.id]?.moves || []; const weight = moves.reduce((sum, move) => sum + (Number(move.weight) || 0), 0); return `<div><span>${html(direction.label)}</span><strong>${moves.length} 招 / ${fmt(weight, 0)} 权重</strong></div>`; }).join(""); }
 function renderPropertyPanel() { const move = selectedMove(); refs.fields.innerHTML = ""; if (!move) { refs.moveTitle.textContent = "未选择招式"; refs.moveSubtitle.textContent = "攻击判定 / 受击配置"; refs.fields.innerHTML = `<div class="empty-state panel-empty">从左侧选择或新增一个招式</div>`; return; } const direction = COMBAT_MOVE_DIRECTIONS.find((item) => item.id === move.triggerDirection) || COMBAT_MOVE_DIRECTIONS[0]; refs.moveTitle.textContent = move.name || move.id; refs.moveSubtitle.textContent = `${direction.label} · ${move.actionName || "未绑定动作"}`; refs.fields.append(group("招式基础", [textField("名称", move.name, (v) => updateMoveField(move.id, "name", v)), readonlyField("ID", move.id), selectField("触发方向", move.triggerDirection, COMBAT_MOVE_DIRECTIONS.map((item) => ({ value: item.id, label: `${item.label} (${item.key})` })), (v) => updateMoveField(move.id, "triggerDirection", v)), selectField("动作", move.actionName, actionOptions(move.actionName), (v) => updateMoveField(move.id, "actionName", v)), readonlyField("动作文件", move.actionFile || ""), numberField("权重", move.weight, 1, (v) => updateMoveField(move.id, "weight", v)), numberField("强度", move.strength, 0.05, (v) => updateMoveField(move.id, "strength", v)), checkField("可被阻挡", move.blockable !== false, (v) => updateMoveField(move.id, "blockable", v)), actionButton("删除招式", "danger-button", () => deleteMove(move.id))])); refs.fields.append(renderHitWindowGroup(move)); refs.fields.append(renderHitWindowDetail(move)); refs.fields.append(renderImpactGroup(move)); updateDirectionDial(); updateSaveButton(); }
@@ -156,7 +314,7 @@ function updateDirectionFromPointer(event) { const move = selectedMove(); if (!m
 function updateDirectionDial() { const move = selectedMove(); const custom = !!move?.impact?.knockback?.customDirection; const degrees = Number(move?.impact?.knockback?.directionDegrees) || 0; refs.directionDial.classList.toggle("active", custom); refs.directionPointer.style.transform = `translate(-50%, -100%) rotate(${degrees}deg)`; }
 function selectMove(moveId) { const move = findMove(moveId); if (!move) return; editor.selectedMoveId = move.id; editor.selectedDirection = move.triggerDirection; editor.selectedHitWindowId = move.hitWindows?.[0]?.id || null; editor.time = 0; renderAll(); loadSelectedMovePreview(); }
 function selectHitWindow(id) { editor.selectedHitWindowId = id; renderPropertyPanel(); renderTimeline(); rebuildAttackMeshes(); applyPose(); }
-function ensureSelection(preferCurrentDirection = false) { const current = selectedMove(); if (current && (!preferCurrentDirection || current.triggerDirection === editor.selectedDirection)) { if (!current.hitWindows?.some((win) => win.id === editor.selectedHitWindowId)) editor.selectedHitWindowId = current.hitWindows?.[0]?.id || null; return; } const first = currentMoves()[0] || allMoves()[0] || null; editor.selectedMoveId = first?.id || null; editor.selectedHitWindowId = first?.hitWindows?.[0]?.id || null; if (!preferCurrentDirection && first) editor.selectedDirection = first.triggerDirection; }
+function ensureSelection(preferCurrentDirection = false) { const current = selectedMove(); if (current && (!preferCurrentDirection || current.triggerDirection === editor.selectedDirection)) { if (!current.hitWindows?.some((win) => win.id === editor.selectedHitWindowId)) editor.selectedHitWindowId = current.hitWindows?.[0]?.id || null; return; } const first = currentMoves()[0] || (!preferCurrentDirection ? allMoves()[0] : null) || null; editor.selectedMoveId = first?.id || null; editor.selectedHitWindowId = first?.hitWindows?.[0]?.id || null; if (!preferCurrentDirection && first) editor.selectedDirection = first.triggerDirection; }
 function addMove() { const direction = editor.selectedDirection; const option = editor.actionOptions.find((item) => item.actionName.includes("combat_Att")) || editor.actionOptions[0]; const move = normalizeCombatMove({ id: `move-${direction}-${Date.now().toString(36)}`, name: "新招式", triggerDirection: direction, actionFile: option?.fileName || "", actionName: option?.actionName || "", weight: 10, strength: 1 }, direction); editor.manager.directions[direction].moves.push(move); editor.selectedMoveId = move.id; editor.selectedHitWindowId = null; markDirty(); loadSelectedMovePreview(); }
 function deleteMove(id) { COMBAT_MOVE_DIRECTIONS.forEach((direction) => { const list = editor.manager.directions[direction.id].moves; const index = list.findIndex((move) => move.id === id); if (index >= 0) list.splice(index, 1); }); ensureSelection(true); markDirty(); loadSelectedMovePreview(); }
 function updateMoveField(id, field, value) { const move = findMove(id); if (!move) return; if (field === "name") move.name = value; else if (field === "triggerDirection") { const next = normalizeCombatDirection(value); move.triggerDirection = next; COMBAT_MOVE_DIRECTIONS.forEach((direction) => { const list = editor.manager.directions[direction.id].moves; const index = list.findIndex((item) => item.id === move.id); if (index >= 0) list.splice(index, 1); }); editor.manager.directions[next].moves.push(move); editor.selectedDirection = next; } else if (field === "actionName") { move.actionName = value; const option = editor.actionOptions.find((item) => item.actionName === value); move.actionFile = option?.fileName || inferAnimationFileForActionName(value, editor.animationFiles, editor.motionConfig) || move.actionFile || ""; editor.time = 0; markDirty(); loadSelectedMovePreview(); return; } else if (field === "weight") move.weight = Math.max(0, Number(value) || 0); else if (field === "strength") move.strength = Math.max(0, Number(value) || 0); else if (field === "blockable") move.blockable = value !== false; markDirty(); }
@@ -177,28 +335,92 @@ function clampTime(value) { const positive = Math.max(0, value); return editor.d
 async function saveCombatMoveManager() { try { setStatus("保存中..."); editor.manager = normalizeCombatMoveManager(editor.manager); const moveId = editor.selectedMoveId; const winId = editor.selectedHitWindowId; const response = await fetch("/api/combat-move-manager", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editor.manager) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `${response.status} ${response.statusText}`); editor.selectedMoveId = moveId; editor.selectedHitWindowId = winId; editor.dirty = false; ensureSelection(); renderAll(); setStatus("已保存到 move_manager.json", "saved"); } catch (error) { console.error(error); setStatus(`保存失败：${error.message}`, "bad"); } }
 function markDirty(render = true) { editor.dirty = true; setStatus("未保存", "dirty"); updateSaveButton(); if (render) renderAll(); }
 function setStatus(text, kind = "") { refs.status.textContent = text; refs.status.classList.toggle("bad", kind === "bad"); refs.status.classList.toggle("saved", kind === "saved"); refs.status.classList.toggle("dirty", kind === "dirty"); }
-function updateSaveButton() { refs.save.classList.toggle("dirty", editor.dirty); refs.save.textContent = editor.dirty ? "保存*" : "保存"; }
+function updateSaveButton() {
+  let marker = refs.save.parentElement.querySelector("[data-dirty-indicator]");
+  if (!marker) {
+    marker = document.createElement("span");
+    marker.dataset.dirtyIndicator = "";
+    marker.dataset.icon = "circle-alert";
+    marker.setAttribute("role", "status");
+    marker.setAttribute("aria-live", "polite");
+    refs.save.before(marker);
+  }
+  marker.hidden = !editor.dirty;
+  marker.textContent = editor.dirty ? "未保存" : "";
+  refs.save.classList.toggle("dirty", editor.dirty);
+  refs.save.dataset.dirty = String(editor.dirty);
+  refs.save.dataset.icon = "save";
+  refs.save.setAttribute("aria-label", editor.dirty ? "保存：有未保存设置" : "保存：设置已保存");
+  refs.save.textContent = editor.dirty ? "保存*" : "保存";
+}
 function previewShouldLoop() { return true; }
 function preparePreviewAction() { if (!activeAction) return; activeAction.enabled = true; activeAction.paused = false; activeAction.timeScale = 1; activeAction.setLoop(previewShouldLoop() ? THREE.LoopRepeat : THREE.LoopOnce, previewShouldLoop() ? Infinity : 1); activeAction.clampWhenFinished = !previewShouldLoop(); activeAction.reset().play(); }
 function togglePlayback() { editor.playing = !editor.playing; if (activeAction) { activeAction.enabled = true; activeAction.paused = false; if (!activeAction.isRunning()) activeAction.play(); if (editor.playing && editor.duration > 0 && editor.time >= editor.duration - 0.001) editor.time = 0; } updatePlayButton(); applyPose(); }
 function stopPlayback() { editor.playing = false; editor.time = 0; if (activeAction) { activeAction.enabled = true; activeAction.paused = false; if (!activeAction.isRunning()) activeAction.play(); } applyPose(); updatePlayButton(); }
-function updatePlayButton() { refs.play.textContent = editor.playing ? "暂停" : "播放"; }
+function updatePlayButton() {
+  refs.play.dataset.icon = editor.playing ? "pause" : "play";
+  refs.play.setAttribute("aria-label", editor.playing ? "暂停" : "播放");
+  refs.play.textContent = editor.playing ? "暂停" : "播放";
+}
 function toggleLayer(layer) { if (layer === "ground") editor.showGround = !editor.showGround; if (layer === "grid") editor.showGrid = !editor.showGrid; if (layer === "skeleton") editor.showSkeleton = !editor.showSkeleton; if (layer === "attack") editor.showAttack = !editor.showAttack; updateToggles(); applyPose(); }
 function updateToggles() { refs.toggleGround.classList.toggle("active", editor.showGround); refs.toggleGrid.classList.toggle("active", editor.showGrid); refs.toggleSkeleton.classList.toggle("active", editor.showSkeleton); refs.toggleAttack.classList.toggle("active", editor.showAttack); if (ground) ground.visible = editor.showGround; if (grid) grid.visible = editor.showGrid; characters.forEach((character) => { if (character.skeletonOverlay) character.skeletonOverlay.group.visible = character === activeCharacter && editor.showSkeleton; }); if (activeCharacter && editor.showSkeleton) updateSkeletonOverlay(activeCharacter); }
-function update() { const delta = Math.min(clock.getDelta(), 0.05); controls?.update(); if (editor.playing && activeAction && editor.duration > 0) { editor.time += delta; const loop = previewShouldLoop(); if (!loop && editor.time >= editor.duration) { editor.time = editor.duration; editor.playing = false; updatePlayButton(); } else editor.time = normalizeTime(editor.time); applyPose(); } if (renderer && scene && camera) renderer.render(scene, camera); }
+function update() { const delta = Math.min(clock.getDelta(), 0.05); controls?.update(); if (editor.playing && activeAction && editor.duration > 0) { editor.time += delta * getPreviewPlaybackScale(); const loop = previewShouldLoop(); if (!loop && editor.time >= editor.duration) { editor.time = editor.duration; editor.playing = false; updatePlayButton(); } else editor.time %= editor.duration; applyPose(); } if (renderer && scene && camera) renderer.render(scene, camera); }
 function resize() { if (!renderer || !camera) return; const w = Math.max(1, refs.viewport.clientWidth); const h = Math.max(1, refs.viewport.clientHeight); renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
-function applyPose() { if (!activeCharacter || !activeAction) { updateTimelineUi(); updateReadout(); return; } activeAction.enabled = true; activeAction.paused = false; if (!activeAction.isRunning()) activeAction.play(); activeCharacter.root.position.set(0, 0, 0); activeCharacter.root.rotation.set(0, PREVIEW_BASE_YAW, 0); activeCharacter.scene.rotation.y = activeCharacter.sceneRestRotationY + THREE.MathUtils.degToRad(currentConfig().visualYawOffsetDegrees ?? 0); activeCharacter.mixer.setTime(normalizeTime(editor.time)); activeCharacter.root.updateMatrixWorld(true); updateSkeletonOverlay(activeCharacter); updateToggles(); updateFacingMarker(); updateKnockbackMarker(); updateAttackVisibility(); updateTimelineUi(); updateReadout(); }
+function followPreviewRoot() {
+  if (!activeCharacter || !camera || !controls) return;
+  const position = activeCharacter.root.getWorldPosition(new THREE.Vector3());
+  position.y = 0;
+  const delta = position.clone().sub(lastPreviewFollowPosition);
+  camera.position.add(delta);
+  controls.target.add(delta);
+  lastPreviewFollowPosition.copy(position);
+}
+
+function applyPose() {
+  if (!activeCharacter || !activeAction || !activeClip) { followPreviewRoot(); updateTimelineUi(); updateReadout(); return; }
+  const actionName = selectedMove()?.actionName;
+  applySharedPreviewPose(activeCharacter, activeAction, activeClip, editor.time, currentConfig(), {
+    baseYaw: PREVIEW_BASE_YAW,
+    codeMovement: actionName === "walk" || actionName === "combatWalk",
+  });
+  followPreviewRoot();
+  updateSkeletonOverlay(activeCharacter); updateToggles(); updateFacingMarker(); updateKnockbackMarker();
+  updateAttackVisibility(); updateTimelineUi(); updateReadout(); updateEffectiveRules();
+}
+
+function updateEffectiveRules() {
+  if (!selectedMove()) return;
+  const config = currentConfig();
+  const policy = getPlaybackPolicy(config, { attack: true });
+  const interval = normalizeInterruptWindow(config.interruptWindow);
+  const rules = [
+    `游戏 1x / ${policy.repetitions === 1 ? "单次" : "循环"}`,
+    `预览 ${fmt(getPreviewPlaybackScale())}x / ${previewShouldLoop() ? "循环" : "单次"}`,
+    interval
+      ? `可打断 ${fmt(interval[0] * 100)}%-${fmt(interval[1] * 100)}% / ${fmt(interval[0] * editor.duration)}-${fmt(interval[1] * editor.duration)}s`
+      : "可打断区间 未配置 / 旧版规则",
+  ];
+  const row = document.createElement("div");
+  row.dataset.effectiveRules = "";
+  row.className = "effective-rules";
+  const label = document.createElement("span");
+  label.textContent = "生效规则";
+  const output = document.createElement("b");
+  output.textContent = rules.join(" · ");
+  row.append(label, output);
+  refs.readout.appendChild(row);
+}
 function updateFacingMarker() { activeCharacter.root.getWorldPosition(scratch); facingMarker.position.set(scratch.x, 0.07, scratch.z); facingMarker.rotation.set(0, activeCharacter.root.rotation.y, 0); facingMarker.visible = true; }
 function createKnockbackMarker() { const group = new THREE.Group(); const material = new THREE.MeshBasicMaterial({ color: 0x26c6ff, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }); const shape = new THREE.Shape(); shape.moveTo(0, 1.1); shape.lineTo(0.22, 0.7); shape.lineTo(0.07, 0.74); shape.lineTo(0.07, -0.12); shape.lineTo(-0.07, -0.12); shape.lineTo(-0.07, 0.74); shape.lineTo(-0.22, 0.7); shape.lineTo(0, 1.1); const arrow = new THREE.Mesh(new THREE.ShapeGeometry(shape), material); arrow.rotation.x = Math.PI / 2; arrow.scale.setScalar(0.65); arrow.renderOrder = 13; group.add(arrow); group.userData.material = material; return group; }
-function updateKnockbackMarker() { const move = selectedMove(); if (!move || !activeCharacter) return; activeCharacter.root.getWorldPosition(scratch); knockbackMarker.position.set(scratch.x, 0.1, scratch.z); const degrees = move.impact?.knockback?.customDirection ? Number(move.impact.knockback.directionDegrees) || 0 : 0; knockbackMarker.rotation.set(0, activeCharacter.root.rotation.y + THREE.MathUtils.degToRad(degrees), 0); knockbackMarker.visible = true; knockbackMarker.userData.material.opacity = move.impact?.knockback?.customDirection ? 0.9 : 0.34; }
+function updateKnockbackMarker() { const move = selectedMove(); if (!move || !activeCharacter) { knockbackMarker.visible = false; return; } activeCharacter.root.getWorldPosition(scratch); knockbackMarker.position.set(scratch.x, 0.1, scratch.z); const degrees = move.impact?.knockback?.customDirection ? Number(move.impact.knockback.directionDegrees) || 0 : 0; const attackYaw = Math.max(0, RELATIVE_DIRECTIONS.indexOf(move.triggerDirection)) * Math.PI / 4; knockbackMarker.rotation.set(0, activeCharacter.root.rotation.y + attackYaw + THREE.MathUtils.degToRad(degrees), 0); knockbackMarker.visible = true; knockbackMarker.userData.material.opacity = move.impact?.knockback?.customDirection ? 0.9 : 0.34; }
 function rebuildAttackMeshes() { characters.forEach(clearAttackMeshes); if (!activeCharacter || !editor.showAttack) return; const model = editor.modelConfig.models?.[activeCharacter.modelConfigId]; const colliders = combatCollision.getAttackCollidersForHitWindow(model, activeCharacter.modelConfigId, selectedHitWindow()); activeCharacter.attackMeshes = colliders.map((collider) => makeAttackMesh(activeCharacter, collider)).filter(Boolean); updateAttackVisibility(); }
 function clearAttackMeshes(character) { character.attackMeshes?.forEach((mesh) => { if (mesh.parent) mesh.parent.remove(mesh); mesh.geometry?.dispose?.(); mesh.material?.dispose?.(); }); character.attackMeshes = []; }
 function makeAttackMesh(character, collider) { const bone = character.scene.getObjectByName(collider.bone); if (!bone) return null; const box = new THREE.BoxGeometry(...collider.size); const edges = new THREE.EdgesGeometry(box); box.dispose(); const mesh = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x20b8ff, transparent: true, opacity: 0.9, depthTest: false })); mesh.position.fromArray(collider.offset); mesh.rotation.set(...collider.rotationDegrees.map((deg) => THREE.MathUtils.degToRad(deg))); mesh.renderOrder = 18; bone.add(mesh); return mesh; }
 function updateAttackVisibility() { const active = isWindowActive(); characters.forEach((character) => character.attackMeshes?.forEach((mesh) => { mesh.visible = character === activeCharacter && editor.showAttack; mesh.material.color.setHex(active ? 0xff3048 : 0x20b8ff); mesh.material.opacity = active ? 1 : 0.72; })); }
 function isWindowActive() { const win = selectedHitWindow(); return !!win && editor.time >= win.start && editor.time <= win.end; }
 function updateReadout() { const move = selectedMove(); const win = selectedHitWindow(); const model = activeCharacter ? editor.modelConfig.models?.[activeCharacter.modelConfigId] : null; const count = combatCollision.getAttackCollidersForHitWindow(model, activeCharacter?.modelConfigId, win).length; refs.readout.innerHTML = move ? `<div><span>Action</span><b>${html(move.actionName || "-")}</b></div><div><span>Duration</span><b>${fmt(editor.duration)}s</b></div><div><span>Mode</span><b>${html(currentConfig().motionMode || "InPlace")}</b></div><div><span>Window</span><b>${win ? `${fmt(win.start)}-${fmt(win.end)}s` : "-"}</b></div><div><span>Attack Boxes</span><b>${count}</b></div><div><span>Strength</span><b>${fmt(move.strength)}</b></div>` : ""; }
-function currentConfig() { return { motionMode: "InPlace", loop: false, ...(editor.motionConfig[selectedMove()?.actionName] || {}) }; }
-function normalizeTime(time) { if (!editor.duration) return 0; if (!previewShouldLoop()) return THREE.MathUtils.clamp(time, 0, editor.duration); return ((time % editor.duration) + editor.duration) % editor.duration; }
+function currentConfig() { return editor.motionConfig[selectedMove()?.actionName] || {}; }
+function normalizeTime(time) { return THREE.MathUtils.clamp(time, 0, editor.duration || 0); }
 function createSkeletonOverlay(model) {
   const bones = [];
   model.traverse((obj) => {
@@ -266,4 +488,4 @@ function findModelBinding(moveId, winId, index) { return findHitWindow(moveId, w
 function fmt(value, digits = 2) { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1") : "0"; }
 function esc(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
 function html(value) { return esc(value); }
-function updateDebugState() { window.__MOVE_MANAGER_STATE = { selectedDirection: editor.selectedDirection, selectedMoveId: editor.selectedMoveId, selectedHitWindowId: editor.selectedHitWindowId, selectedModelId: editor.selectedModelId, time: editor.time, duration: editor.duration, dirty: editor.dirty, ready: window.__MOVE_MANAGER_READY, currentAction: selectedMove()?.actionName || null, currentMotionMode: currentConfig().motionMode || "InPlace", attackColliderCount: activeCharacter?.attackMeshes?.length || 0 }; }
+function updateDebugState() { window.__MOVE_MANAGER_STATE = { pose: getPreviewPoseMetrics(), playing: editor.playing, config: currentConfig(), selectedDirection: editor.selectedDirection, selectedMoveId: editor.selectedMoveId, selectedHitWindowId: editor.selectedHitWindowId, selectedModelId: editor.selectedModelId, time: editor.time, duration: editor.duration, dirty: editor.dirty, ready: window.__MOVE_MANAGER_READY, currentAction: selectedMove()?.actionName || null, currentMotionMode: currentConfig().motionMode || "InPlace", attackColliderCount: activeCharacter?.attackMeshes?.length || 0 }; }

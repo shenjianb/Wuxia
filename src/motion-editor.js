@@ -3,7 +3,21 @@ import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { createFacingMarker } from "./facing-marker.js";
+import { normalizeInterruptWindow, isActionInterruptible } from "./combat-controls.js";
+import { normalizeCombatMoveManager, getCombatMoveActionNames } from "./combat-move-manager.js";
+import {
+  applyPreviewPose as applySharedPreviewPose,
+  filterAnimationTracks,
+  computeAnimNaturalSpeed,
+  getPlaybackScale,
+  getPlaybackPolicy,
+  calculateClipRootCycle,
+  getDetrendedRootPose,
+  computeIntegratedRootMotion as computeSharedRootMotion,
+} from "./animation-motion.js";
 import "./motion-editor.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
 
 const ASSET_VERSION = "combat-state-20260527-02";
 const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
@@ -34,6 +48,7 @@ const PLAYER_SPEED = 2;
 const TRAIL_SEGMENTS = 96;
 
 const CONTROL_SCHEMA = [
+  { group: "行为切换", key: "interruptWindow", label: "动作可打断区间", type: "interrupt" },
   { group: "基础", key: "motionMode", label: "Motion Mode", type: "select", options: ["InPlace", "RootMotion"], defaultValue: "InPlace", affectsClip: true },
   { group: "姿态修正", key: "visualYawOffsetDegrees", label: "可视朝向偏移", type: "range", min: -180, max: 180, step: 1, defaultValue: 0 },
   { group: "Root Pose", key: "bakeIntoPoseXZ", label: "Root Pose XZ Bake", type: "checkbox", defaultValue: true, affectsClip: true },
@@ -58,6 +73,7 @@ const CONTROL_SCHEMA = [
 const CONTROL_BY_KEY = new Map(CONTROL_SCHEMA.map((control) => [control.key, control]));
 const loader = new GLTFLoader();
 const clock = new THREE.Clock();
+const lastPreviewFollowPosition = new THREE.Vector3();
 const scratchVector = new THREE.Vector3();
 let altRightDragging = false;
 let altRightPrevY = 0;
@@ -73,6 +89,7 @@ let previewGround;
 let previewGrid;
 let animationAssetFiles = [];
 let motionConfig = {};
+let gameplayAttackNames = null;
 let animations = {};
 let characters = {};
 let activeCharacter = null;
@@ -94,6 +111,7 @@ const editor = {
 };
 
 const refs = {};
+const advancedGroupOpen = new Map();
 
 window.__MOTION_EDITOR_READY = false;
 window.__MOTION_EDITOR_ERROR = null;
@@ -102,11 +120,13 @@ boot();
 
 async function boot() {
   mountUi();
+  initializeEditorUi();
   bindUi();
 
   try {
     setStatus("加载 Motion Config...");
     motionConfig = await loadMotionConfig();
+    gameplayAttackNames = await loadGameplayAttackNames();
     animationAssetFiles = await loadAnimationAssetFiles();
     registerConfiguredAnimationAssets();
     editor.selectedActionName = pickInitialAction();
@@ -452,6 +472,7 @@ async function createCharacter(gender, url) {
     mixer: new THREE.AnimationMixer(gltf.scene),
     meshes,
     skeletonOverlay,
+    restModel: captureRestModel(gltf.scene),
     rootRestPosition,
     rootRestQuaternion,
     sceneRestRotationY: gltf.scene.rotation.y,
@@ -476,8 +497,12 @@ function selectCharacter(gender) {
 
 async function selectAction(actionName) {
   if (!actionName) return;
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
+  activeAction = null;
+  activeClip = null;
+  editor.duration = 0;
   editor.selectedActionName = actionName;
-  ensureActionConfig(actionName);
   ensurePreviewOptions(actionName);
   editor.time = 0;
   renderActionList();
@@ -486,11 +511,14 @@ async function selectAction(actionName) {
     if (!animations[actionName] && ASSETS.animations[actionName]) {
       setStatus(`加载动作 ${actionName}...`);
       await loadAnimationAction(actionName);
+      if (editor.selectedActionName !== actionName) return;
       setStatus("预览就绪", "saved");
       renderActionList();
     }
+    if (editor.selectedActionName !== actionName) return;
     rebuildPreviewAction(false);
   } catch (error) {
+    if (editor.selectedActionName !== actionName) return;
     setStatus(`动作加载失败：${error.message}`, "bad");
   }
 }
@@ -501,10 +529,12 @@ function rebuildPreviewAction(preserveTime = true) {
   const previousTime = preserveTime ? editor.time : 0;
   const config = currentConfig();
   activeClip = animations[editor.selectedActionName];
-  activeFilteredClip = filterAnimationTracks(activeClip, activeCharacter.scene, config);
+  activeFilteredClip = filterAnimationTracks(activeClip, activeCharacter.restModel, motionConfig[editor.selectedActionName]);
   editor.duration = activeClip.duration || activeFilteredClip.duration || 0;
   editor.time = normalizePreviewTime(previousTime);
 
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
   activeCharacter.mixer.stopAllAction();
   activeAction = activeCharacter.mixer.clipAction(activeFilteredClip);
   activeAction.enabled = true;
@@ -517,8 +547,19 @@ function rebuildPreviewAction(preserveTime = true) {
   updateActionTitle();
 }
 
+function followPreviewRoot() {
+  if (!activeCharacter || !camera || !controls) return;
+  const position = activeCharacter.root.getWorldPosition(new THREE.Vector3());
+  position.y = 0;
+  const delta = position.clone().sub(lastPreviewFollowPosition);
+  camera.position.add(delta);
+  controls.target.add(delta);
+  lastPreviewFollowPosition.copy(position);
+}
+
 function applyPreviewPose() {
   if (!activeCharacter || !activeAction || !activeClip) {
+    followPreviewRoot();
     updateTimelineUi();
     updateReadout();
     return;
@@ -526,41 +567,11 @@ function applyPreviewPose() {
 
   const config = currentConfig();
   const time = normalizePreviewTime(editor.time);
-  const visualYaw = THREE.MathUtils.degToRad(config.visualYawOffsetDegrees ?? 0);
-
-  activeCharacter.root.position.set(0, 0, 0);
-  activeCharacter.root.rotation.set(0, PREVIEW_BASE_YAW, 0);
-  activeCharacter.scene.rotation.y = activeCharacter.sceneRestRotationY + visualYaw;
-  activeAction.timeScale = 1;
-  activeCharacter.mixer.setTime(time);
-
-  const skeletonRoot = activeCharacter.scene.getObjectByName(ROOT_TRACK_NAME);
-  if (skeletonRoot && config.motionMode === "RootMotion") {
-    const motion = computeIntegratedRootMotion(editor.selectedActionName, config, time);
-    activeCharacter.root.position.copy(motion.position);
-    activeCharacter.root.rotation.set(0, motion.yaw, 0);
-
-    const rootPose = getDetrendedRootPose(activeClip, time, config);
-    const rootPoseStart = getDetrendedRootPose(activeClip, 0, config);
-    const rootPosePosition = activeCharacter.rootRestPosition
-      .clone()
-      .add(rootPose)
-      .sub(rootPoseStart);
-    rootPosePosition.y = rootPose.y;
-    skeletonRoot.position.copy(rootPosePosition);
-    const rootPoseAnchorQuaternion = getRootPoseRotationAnchorQuaternion(
-      activeClip,
-      config,
-      activeCharacter.rootRestQuaternion,
-    );
-    skeletonRoot.quaternion.copy(
-      getRootPoseQuaternion(activeClip, time, config, rootPoseAnchorQuaternion),
-    );
-  } else if (skeletonRoot && config.motionMode === "InPlace" && config.bakeIntoPoseRotation !== false) {
-    skeletonRoot.quaternion.copy(activeCharacter.rootRestQuaternion);
-  }
-
-  activeCharacter.root.updateMatrixWorld(true);
+  applySharedPreviewPose(activeCharacter, activeAction, activeClip, time, config, {
+    baseYaw: PREVIEW_BASE_YAW,
+    codeMovement: editor.selectedActionName === "walk" || editor.selectedActionName === "combatWalk",
+  });
+  followPreviewRoot();
   updateRootMarker();
   updateFacingMarker();
   updateSkeletonOverlay(activeCharacter);
@@ -688,7 +699,7 @@ async function addSelectedAnimationAction() {
     renderAddActionOptions();
     renderActionList();
     await selectAction(actionName);
-    await saveMotionConfig();
+    if (!await saveMotionConfig()) return;
     setStatus(`已添加 ${actionName}`, "saved");
   } catch (error) {
     delete ASSETS.animations[actionName];
@@ -740,7 +751,7 @@ async function deleteAction(actionName) {
       updateReadout();
       updateDebugState();
     }
-    await saveMotionConfig();
+    if (!await saveMotionConfig()) return;
     setStatus(`已删除 ${actionName}`, "saved");
   } catch (error) {
     setStatus(`删除后保存失败：${error.message}`, "bad");
@@ -770,6 +781,7 @@ function renderActionList() {
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className = "delete-action-button";
+      deleteButton.dataset.icon = "trash-2";
       deleteButton.textContent = "删除";
       deleteButton.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -783,6 +795,9 @@ function renderActionList() {
 }
 
 function renderFields() {
+  refs.fields.querySelectorAll("details[data-motion-group]").forEach((group) => {
+    advancedGroupOpen.set(group.dataset.motionGroup, group.open);
+  });
   const actionName = editor.selectedActionName;
   if (!actionName) {
     refs.fields.innerHTML = "";
@@ -790,13 +805,18 @@ function renderFields() {
     refs.actionSubtitle.textContent = "Motion Config";
     return;
   }
-  const config = ensureActionConfig(actionName);
+  const config = currentConfig();
   ensurePreviewOptions(actionName);
   refs.fields.innerHTML = "";
   refs.actionTitle.textContent = actionName ?? "未选择动作";
   updateActionTitle();
 
   refs.fields.appendChild(createPreviewOptions());
+  const rules = document.createElement("output");
+  rules.className = "effective-rules";
+  rules.dataset.effectiveRules = "";
+  rules.setAttribute("aria-label", "当前生效规则");
+  refs.fields.appendChild(rules);
 
   const groups = new Map();
   CONTROL_SCHEMA.forEach((control) => {
@@ -806,27 +826,72 @@ function renderFields() {
   });
 
   groups.forEach((controlsInGroup, groupName) => {
-    const group = document.createElement("section");
-    group.className = "field-group";
-    const heading = document.createElement("h2");
-    heading.textContent = groupName;
-    group.appendChild(heading);
+    const group = createMotionGroup(groupName, groupName === "基础" || groupName === "行为切换");
     controlsInGroup.forEach((control) => group.appendChild(createControl(control, config)));
     refs.fields.appendChild(group);
   });
 
   const unknownKeys = Object.keys(config).filter((key) => !CONTROL_BY_KEY.has(key));
   if (unknownKeys.length) {
-    const group = document.createElement("section");
-    group.className = "field-group";
-    const heading = document.createElement("h2");
-    heading.textContent = "扩展参数";
-    group.appendChild(heading);
+    const group = createMotionGroup("扩展参数");
     unknownKeys.forEach((key) => group.appendChild(createUnknownControl(key, config[key])));
     refs.fields.appendChild(group);
   }
 
   refs.fields.appendChild(createJsonEditor(config));
+  updateEffectiveRules();
+}
+
+function createMotionGroup(name, basic = false) {
+  const group = document.createElement(basic ? "section" : "details");
+  group.className = "field-group";
+  const heading = document.createElement(basic ? "h2" : "summary");
+  heading.textContent = name;
+  group.appendChild(heading);
+  if (!basic) {
+    group.dataset.motionGroup = name;
+    group.open = advancedGroupOpen.get(name) ?? false;
+    group.addEventListener("toggle", () => {
+      if (group.isConnected) advancedGroupOpen.set(name, group.open);
+    });
+  }
+  return group;
+}
+
+function updateEffectiveRules() {
+  const output = refs.fields.querySelector("[data-effective-rules]");
+  if (!output) return;
+  const config = currentConfig();
+  const attack = gameplayAttackNames?.has(editor.selectedActionName) ?? false;
+  const policy = getPlaybackPolicy(config, { attack });
+  const interval = normalizeInterruptWindow(config.interruptWindow);
+  const rate = getPreviewPlaybackScale();
+  const rules = [
+    gameplayAttackNames
+      ? `游戏 ${formatNumber(attack ? 1 : rate)}x / ${policy.repetitions === 1 ? "单次" : "循环"}`
+      : `配置循环 ${config.loop === false ? "关闭" : "开启"}`,
+    `预览 ${getPreviewLoop() ? "循环" : "单次"}`,
+  ];
+  if (isMoveAction(editor.selectedActionName) && activeClip && activeCharacter) {
+    rules.push(`自然速度 ${formatNumber(computeAnimNaturalSpeed(activeClip, activeCharacter))} m/s · 共享速率 ${formatNumber(rate)}x`);
+  }
+  rules.push(interval
+    ? `可打断 ${formatNumber(interval[0] * 100)}%-${formatNumber(interval[1] * 100)}% / ${formatNumber(interval[0] * editor.duration)}-${formatNumber(interval[1] * editor.duration)}s`
+    : "可打断区间 未配置 / 旧版规则");
+  const text = rules.join(" · ");
+  if (output.textContent !== text) output.textContent = text;
+}
+
+async function loadGameplayAttackNames() {
+  for (const url of ["/api/combat-move-manager", assetUrl("./assets/combat/move_manager.json")]) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+      const manager = normalizeCombatMoveManager(await response.json());
+      return new Set(getCombatMoveActionNames(manager));
+    } catch { /* Read-only rule summary can fall back to config values. */ }
+  }
+  return null;
 }
 
 function createPreviewOptions() {
@@ -843,6 +908,7 @@ function createPreviewOptions() {
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = getPreviewLoop();
+  input.dataset.previewLoop = "";
   input.addEventListener("change", () => updatePreviewLoop(input.checked));
   label.append(text, input);
   row.appendChild(label);
@@ -889,6 +955,7 @@ function isMoveAction(actionName) {
 }
 
 function createControl(control, config) {
+  if (control.type === "interrupt") return createInterruptControl(config);
   const row = document.createElement("div");
   row.className = "control-row";
   const value = config[control.key] ?? control.defaultValue;
@@ -960,6 +1027,60 @@ function createControl(control, config) {
   return row;
 }
 
+function createInterruptControl(config) {
+  const row = document.createElement("div");
+  row.className = "control-row interrupt-control";
+  const window = normalizeInterruptWindow(config.interruptWindow);
+  const label = document.createElement("label");
+  label.className = "interrupt-enable";
+  const text = document.createElement("span");
+  text.textContent = "动作可打断区间";
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.checked = !!window;
+  enabled.dataset.interruptEnabled = "";
+  enabled.addEventListener("change", () => {
+    updateConfigValue("interruptWindow", enabled.checked ? [0.7, 1] : null);
+    renderFields();
+  });
+  label.append(text, enabled);
+  row.append(label);
+  if (!window) return row;
+  const track = document.createElement("div");
+  track.className = "interrupt-track";
+  const selection = document.createElement("div");
+  selection.className = "interrupt-selection";
+  const readout = document.createElement("output");
+  readout.dataset.interruptReadout = "";
+  const inputs = window.map((value, index) => {
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = 0; input.max = 1; input.step = 0.001; input.value = value;
+    input.setAttribute("aria-label", index ? "可打断区间结束" : "可打断区间开始");
+    input.dataset.interruptHandle = String(index);
+    input.addEventListener("input", () => {
+      const values = inputs.map((item) => Number(item.value));
+      values[index] = index ? Math.max(values[0], values[1]) : Math.min(values[0], values[1]);
+      input.value = values[index];
+      updateConfigValue("interruptWindow", values);
+      paint();
+    });
+    return input;
+  });
+  function paint() {
+    const [start, end] = normalizeInterruptWindow(currentConfig().interruptWindow) || [0, 0];
+    inputs[0].style.zIndex = start > 0.5 ? "3" : "2";
+    inputs[1].style.zIndex = start > 0.5 ? "2" : "3";
+    selection.style.left = `${start * 100}%`;
+    selection.style.width = `${(end - start) * 100}%`;
+    readout.textContent = `${Math.round(start * 100)}%–${Math.round(end * 100)}% · ${formatNumber(start * editor.duration)}–${formatNumber(end * editor.duration)}s`;
+  }
+  track.append(selection, ...inputs);
+  row.append(track, readout);
+  paint();
+  return row;
+}
+
 function createUnknownControl(key, value) {
   const row = document.createElement("div");
   row.className = typeof value === "boolean" ? "control-row check-row" : "control-row";
@@ -1011,10 +1132,7 @@ function createUnknownControl(key, value) {
 }
 
 function createJsonEditor(config) {
-  const group = document.createElement("section");
-  group.className = "field-group";
-  const heading = document.createElement("h2");
-  heading.textContent = "当前动作 JSON";
+  const group = createMotionGroup("当前动作 JSON");
   const textarea = document.createElement("textarea");
   textarea.spellcheck = false;
   textarea.value = JSON.stringify(config, null, 2);
@@ -1041,7 +1159,7 @@ function createJsonEditor(config) {
     }
   });
 
-  group.append(heading, textarea, message);
+  group.append(textarea, message);
   return group;
 }
 
@@ -1070,6 +1188,7 @@ function createResetButton(control) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "reset-button";
+  button.dataset.icon = "rotate-ccw";
   button.textContent = "Reset";
   button.title = `${control.key}: ${formatDefaultValue(control.defaultValue)}`;
   button.setAttribute("aria-label", `Reset ${control.key}`);
@@ -1113,7 +1232,18 @@ function updateConfigValue(key, value) {
     applyPreviewPose();
     updateTrail();
   }
-  if (shouldRefreshVisibleControls(key)) renderFields();
+  if (shouldRefreshVisibleControls(key)) {
+    renderFields();
+    if (key === "motionMode") {
+      const relevantGroups = value === "RootMotion" ? ["Root Motion", "Root Pose"] : ["Root Pose", "移动/速度"];
+      refs.fields.querySelectorAll("details[data-motion-group]").forEach((group) => {
+        if (relevantGroups.includes(group.dataset.motionGroup)) {
+          group.open = true;
+          advancedGroupOpen.set(group.dataset.motionGroup, true);
+        }
+      });
+    }
+  }
 }
 
 function cloneConfigValue(value) {
@@ -1170,8 +1300,10 @@ async function saveMotionConfig() {
     }
     setDirty(false);
     setStatus("已保存到 motion_config.json", "saved");
+    return true;
   } catch (error) {
     setStatus(`保存失败：${error.message}`, "bad");
+    return false;
   } finally {
     refs.save.disabled = false;
     updateSaveButton();
@@ -1184,7 +1316,21 @@ function setDirty(dirty) {
 }
 
 function updateSaveButton() {
+  let marker = refs.save.parentElement.querySelector("[data-dirty-indicator]");
+  if (!marker) {
+    marker = document.createElement("span");
+    marker.dataset.dirtyIndicator = "";
+    marker.dataset.icon = "circle-alert";
+    marker.setAttribute("role", "status");
+    marker.setAttribute("aria-live", "polite");
+    refs.save.before(marker);
+  }
+  marker.hidden = !editor.dirty;
+  marker.textContent = editor.dirty ? "未保存" : "";
   refs.save.classList.toggle("dirty", editor.dirty);
+  refs.save.dataset.dirty = String(editor.dirty);
+  refs.save.dataset.icon = "save";
+  refs.save.setAttribute("aria-label", editor.dirty ? "保存：有未保存设置" : "保存：设置已保存");
   refs.save.textContent = editor.dirty ? "保存*" : "保存";
 }
 
@@ -1204,13 +1350,21 @@ function updateActionTitle() {
 }
 
 function updatePlayButton() {
+  refs.play.dataset.icon = editor.playing ? "pause" : "play";
+  refs.play.setAttribute("aria-label", editor.playing ? "暂停" : "播放");
   refs.play.textContent = editor.playing ? "暂停" : "播放";
 }
 
 function updateTimelineUi() {
+  updateEffectiveRules();
   refs.timeline.max = Math.max(editor.duration, 0.001);
   refs.timeline.value = Math.min(editor.time, editor.duration || 0);
   refs.time.textContent = `${formatNumber(editor.time)} / ${formatNumber(editor.duration)}s`;
+  const window = normalizeInterruptWindow(currentConfig().interruptWindow);
+  const output = refs.fields.querySelector("[data-interrupt-readout]");
+  if (output && window) {
+    output.textContent = `${Math.round(window[0] * 100)}%–${Math.round(window[1] * 100)}% · ${formatNumber(window[0] * editor.duration)}–${formatNumber(window[1] * editor.duration)}s · ${isActionInterruptible(currentConfig(), editor.time, editor.duration) ? "可打断" : "不可打断"}`;
+  }
 }
 
 function updateReadout() {
@@ -1246,8 +1400,8 @@ function updateTrail() {
   for (let i = 0; i <= TRAIL_SEGMENTS; i += 1) {
     const time = activeClip.duration * (i / TRAIL_SEGMENTS);
     const point = config.motionMode === "RootMotion"
-      ? computeIntegratedRootMotion(editor.selectedActionName, config, time, Math.max(4, Math.ceil(i / 2))).position
-      : getInPlaceRootMarkerOffset(time, config);
+      ? computeIntegratedRootMotion(editor.selectedActionName, config, time).position
+      : getInPlaceRootMarkerOffset(time, config).add(computeIntegratedRootMotion(editor.selectedActionName, config, time).position);
     points.push(new THREE.Vector3(point.x, 0.035, point.z));
   }
 
@@ -1276,12 +1430,15 @@ function updateFacingMarker() {
 
 function updateDebugState() {
   window.__MOTION_EDITOR_STATE = {
+    pose: getPreviewPoseMetrics(),
     action: editor.selectedActionName,
     gender: editor.selectedGender,
     time: editor.time,
     duration: editor.duration,
     playing: editor.playing,
     dirty: editor.dirty,
+    interruptWindow: normalizeInterruptWindow(currentConfig().interruptWindow),
+    interruptible: isActionInterruptible(currentConfig(), editor.time, editor.duration),
     showGround: editor.showGround,
     showGrid: editor.showGrid,
     showSkeleton: editor.showSkeleton,
@@ -1300,18 +1457,17 @@ function setActionLoop(action) {
 }
 
 function normalizePreviewTime(time) {
-  if (!editor.duration) return 0;
-  if (!getPreviewLoop()) {
-    return THREE.MathUtils.clamp(time, 0, editor.duration);
-  }
-  return ((time % editor.duration) + editor.duration) % editor.duration;
+  return THREE.MathUtils.clamp(time, 0, editor.duration || 0);
 }
 
 function getPreviewPlaybackScale() {
-  if (!hasConfiguredCodeMoveSpeed(editor.selectedActionName)) return 1;
-  const naturalSpeed = computeAnimNaturalSpeed(editor.selectedActionName);
-  if (naturalSpeed <= 0.1) return 1;
-  return THREE.MathUtils.clamp(getConfiguredCodeMoveSpeed(editor.selectedActionName) / naturalSpeed, 0.5, 3);
+  if (!activeClip || !activeCharacter) return 1;
+  const actionName = editor.selectedActionName;
+  if (actionName !== "walk" && actionName !== "combatWalk") return 1;
+  const config = currentConfig();
+  const speed = Number(config.codeMoveSpeed);
+  if (config.motionMode === "RootMotion" && !(Number.isFinite(speed) && speed >= 0)) return 1;
+  return getPlaybackScale(config, computeAnimNaturalSpeed(activeClip, activeCharacter), { min: 0 });
 }
 
 function getInPlaceRootMarkerOffset(time, config) {
@@ -1329,134 +1485,11 @@ function getInPlaceRootMarkerOffset(time, config) {
     .applyAxisAngle(WORLD_UP, PREVIEW_BASE_YAW);
 }
 
-function computeIntegratedRootMotion(actionName, config, targetTime, steps = 64) {
-  const clip = animations[actionName];
-  const result = {
-    position: new THREE.Vector3(),
-    yaw: PREVIEW_BASE_YAW,
-  };
-  if (!clip || targetTime <= 0 || clip.duration <= 0) return result;
-
-  const sampleCount = Math.max(1, Math.min(steps, Math.ceil(TRAIL_SEGMENTS * (targetTime / clip.duration))));
-  let previous = sampleClipRootMotion(clip, 0);
-
-  for (let i = 1; i <= sampleCount; i += 1) {
-    const time = targetTime * (i / sampleCount);
-    const current = sampleClipRootMotion(clip, time);
-    const deltaPos = current.position.clone().sub(previous.position);
-
-    if (config.applyRootRotation !== false) {
-      const deltaRot = previous.quaternion.clone().invert().premultiply(current.quaternion);
-      result.yaw += extractYawDelta(deltaRot, result.yaw, config);
-    }
-
-    result.position.add(getRootMotionDeltaWorld(actionName, deltaPos, config, result.yaw));
-    previous = current;
-  }
-
-  return result;
-}
-
-function extractYawDelta(deltaRot, rootYaw, config) {
-  if (!activeCharacter) return 0;
-  const visualYaw = THREE.MathUtils.degToRad(config.visualYawOffsetDegrees ?? 0);
-  const parentWorldQuat = new THREE.Quaternion().setFromEuler(
-    new THREE.Euler(0, rootYaw + activeCharacter.sceneRestRotationY + visualYaw, 0),
-  );
-  const worldDeltaRot = parentWorldQuat
-    .clone()
-    .multiply(deltaRot)
-    .multiply(parentWorldQuat.clone().invert());
-  return new THREE.Euler().setFromQuaternion(worldDeltaRot, "YXZ").y;
-}
-
-function getRootMotionDeltaWorld(actionName, deltaPos, config, rootYaw) {
-  const sceneScale = activeCharacter
-    ? activeCharacter.scene.getWorldScale(new THREE.Vector3())
-    : new THREE.Vector3(1, 1, 1);
-  const scaledLocalDelta = new THREE.Vector3(deltaPos.x * sceneScale.x, 0, deltaPos.z * sceneScale.z);
-
-  if (config.rootMotionMoveBasis === "characterForward") {
-    const clip = animations[actionName];
-    const cycleDelta = clip
-      ? calculateClipRootCycle(clip).cyclePosition.clone()
-      : new THREE.Vector3(0, 0, 1);
-    cycleDelta.y = 0;
-    if (cycleDelta.lengthSq() <= 0.000001) cycleDelta.set(0, 0, 1);
-    cycleDelta.normalize();
-
-    let signedDistance = scaledLocalDelta.dot(cycleDelta);
-    if (config.rootMotionForwardOnly) signedDistance = Math.max(0, signedDistance);
-    if (Math.abs(signedDistance) <= 0.000001) return new THREE.Vector3();
-    return getConfiguredCodeMoveDirection(actionName, rootYaw, config).multiplyScalar(signedDistance);
-  }
-
-  const localDelta = scaledLocalDelta.clone();
-  const clip = animations[actionName];
-  if (config.rootMotionForwardOnly && clip) {
-    const cycleDelta = calculateClipRootCycle(clip).cyclePosition.clone();
-    cycleDelta.y = 0;
-    if (cycleDelta.lengthSq() > 0.000001) {
-      cycleDelta.normalize();
-      const signedDistance = localDelta.dot(cycleDelta);
-      if (signedDistance < 0) localDelta.addScaledVector(cycleDelta, -signedDistance);
-    }
-  }
-
-  return localDelta
-    .applyAxisAngle(WORLD_UP, activeCharacter?.sceneRestRotationY ?? 0)
-    .applyAxisAngle(WORLD_UP, rootYaw);
-}
-
-function getConfiguredCodeMoveDirection(actionName, rootYaw, config = currentConfig()) {
-  const localDirection = new THREE.Vector3(0, 0, 1);
-
-  if (config.codeMoveBasis === "clipRootDelta") {
-    const clip = animations[actionName];
-    if (clip) {
-      const cycleDelta = calculateClipRootCycle(clip).cyclePosition.clone();
-      cycleDelta.y = 0;
-      if (cycleDelta.lengthSq() > 0.000001) localDirection.copy(cycleDelta.normalize());
-    }
-  }
-
-  if (Array.isArray(config.codeMoveLocalDirection) && config.codeMoveLocalDirection.length >= 3) {
-    localDirection.set(
-      Number(config.codeMoveLocalDirection[0]) || 0,
-      Number(config.codeMoveLocalDirection[1]) || 0,
-      Number(config.codeMoveLocalDirection[2]) || 0,
-    );
-    localDirection.y = 0;
-    if (localDirection.lengthSq() <= 0.000001) localDirection.set(0, 0, 1);
-    localDirection.normalize();
-  }
-
-  const yawOffset = THREE.MathUtils.degToRad(config.codeMoveYawOffsetDegrees ?? 0);
-  return localDirection
-    .applyAxisAngle(WORLD_UP, yawOffset)
-    .applyAxisAngle(WORLD_UP, rootYaw)
-    .normalize();
-}
-
-function computeAnimNaturalSpeed(actionName) {
-  const clip = animations[actionName];
-  if (!clip || clip.duration <= 0 || !activeCharacter) return 0;
-
-  const cycleData = calculateClipRootCycle(clip);
-  activeCharacter.root.updateMatrixWorld(true);
-  const m3 = new THREE.Matrix3().setFromMatrix4(activeCharacter.scene.matrixWorld);
-  const worldDisp = cycleData.cyclePosition.clone().applyMatrix3(m3);
-  return Math.hypot(worldDisp.x, worldDisp.z) / clip.duration;
-}
-
-function getConfiguredCodeMoveSpeed(actionName) {
-  const speed = Number(motionConfig[actionName]?.codeMoveSpeed);
-  return Number.isFinite(speed) && speed >= 0 ? speed : PLAYER_SPEED;
-}
-
-function hasConfiguredCodeMoveSpeed(actionName) {
-  const speed = Number(motionConfig[actionName]?.codeMoveSpeed);
-  return Number.isFinite(speed) && speed >= 0;
+function computeIntegratedRootMotion(actionName, config, targetTime) {
+  return computeSharedRootMotion(animations[actionName], config, activeCharacter, targetTime, {
+    baseYaw: PREVIEW_BASE_YAW,
+    codeMovement: actionName === "walk" || actionName === "combatWalk",
+  });
 }
 
 function mergeAnimationClips(clips, name) {
@@ -1464,218 +1497,35 @@ function mergeAnimationClips(clips, name) {
   return new THREE.AnimationClip(name, -1, tracks);
 }
 
-function filterAnimationTracks(clip, model, config = {}) {
-  const resolvedConfig = {
-    motionMode: "InPlace",
-    bakeIntoPoseXZ: true,
-    bakeIntoPoseY: true,
-    bakeIntoPoseRotation: true,
-    ...config,
+function captureRestModel(model) {
+  const nodes = new Map();
+  model.traverse((node) => nodes.set(node.name, { position: node.position.clone() }));
+  return { getObjectByName: (name) => nodes.get(name) };
+}
+
+function getPreviewPoseMetrics() {
+  if (!activeCharacter || !activeAction || !activeClip) return null;
+  const skeletonRoot = activeCharacter.scene.getObjectByName("Root");
+  const hand = activeCharacter.scene.getObjectByName("Bip001_R_Hand");
+  const leftHand = activeCharacter.scene.getObjectByName("Bip001_L_Hand");
+  return {
+    modelId: activeCharacter.gender === "female" ? "SK_BaseFemale" : "SK_BaseMale",
+    actionName: activeAction.getClip().name,
+    rootPosition: activeCharacter.root.position.toArray(),
+    rootQuaternion: activeCharacter.root.quaternion.toArray(),
+    skeletonRootPosition: skeletonRoot?.position.toArray() ?? null,
+    skeletonRootQuaternion: skeletonRoot?.quaternion.toArray() ?? null,
+    handWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    leftHandWorldPosition: leftHand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    rightHandWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    playbackRate: getPreviewPlaybackScale(),
+    playbackPolicy: {
+      codeMovement: editor.selectedActionName === "walk" || editor.selectedActionName === "combatWalk",
+      previewLoop: getPreviewLoop(),
+      configuredLoop: currentConfig().loop ?? null,
+      baseYaw: PREVIEW_BASE_YAW,
+    },
   };
-
-  const clone = clip.clone();
-  clone.tracks = clone.tracks.map((track) => {
-    const targetName = getTrackTargetName(track.name);
-    if (track.name.endsWith(".scale")) return null;
-
-    if (targetName === ROOT_TRACK_NAME) {
-      if (isRotationTrack(track.name)) {
-        if (resolvedConfig.motionMode === "InPlace" && resolvedConfig.bakeIntoPoseRotation) return null;
-        if (resolvedConfig.motionMode === "RootMotion" && resolvedConfig.applyRootRotation === false) return null;
-      }
-
-      if (track.name.endsWith(".position") && resolvedConfig.motionMode === "InPlace") {
-        const numKeys = track.times.length;
-        if (numKeys >= 2) {
-          const stride = 3;
-          const values = new track.values.constructor(track.values.length);
-          const duration = track.times[numKeys - 1] - track.times[0];
-          const t0 = track.times[0];
-          const startX = track.values[0];
-          const startY = track.values[1];
-          const startZ = track.values[2];
-          const endIdx = (numKeys - 1) * stride;
-          const endX = track.values[endIdx];
-          const endY = track.values[endIdx + 1];
-          const endZ = track.values[endIdx + 2];
-          const driftRateX = duration > 0 ? (endX - startX) / duration : 0;
-          const driftRateY = duration > 0 ? (endY - startY) / duration : 0;
-          const driftRateZ = duration > 0 ? (endZ - startZ) / duration : 0;
-
-          for (let i = 0; i < numKeys; i += 1) {
-            const t = track.times[i] - t0;
-            values[i * stride] = track.values[i * stride] - (resolvedConfig.bakeIntoPoseXZ ? driftRateX * t : 0);
-            values[i * stride + 1] = track.values[i * stride + 1] - (resolvedConfig.bakeIntoPoseY ? driftRateY * t : 0);
-            values[i * stride + 2] = track.values[i * stride + 2] - (resolvedConfig.bakeIntoPoseXZ ? driftRateZ * t : 0);
-          }
-
-          const swayScale = resolvedConfig.rootSwayScale ?? 1;
-          if (swayScale < 1) {
-            const baseX = values[0];
-            const baseY = values[1];
-            const baseZ = values[2];
-            for (let i = 1; i < numKeys; i += 1) {
-              values[i * stride] = baseX + (values[i * stride] - baseX) * swayScale;
-              values[i * stride + 1] = baseY + (values[i * stride + 1] - baseY) * swayScale;
-              values[i * stride + 2] = baseZ + (values[i * stride + 2] - baseZ) * swayScale;
-            }
-          }
-
-          return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
-        }
-      }
-    }
-
-    if (targetName !== ROOT_TRACK_NAME && track.name.endsWith(".position")) {
-      if (targetName === "Bip001_Pelvis" || targetName === "Bip001 Pelvis") {
-        const target = model.getObjectByName(targetName);
-        if (target && track.values.length >= 3) {
-          const values = new track.values.constructor(track.values.length);
-          const firstX = track.values[0];
-          const firstY = track.values[1];
-          const firstZ = track.values[2];
-
-          for (let i = 0; i < track.values.length; i += 3) {
-            values[i] = target.position.x + (track.values[i] - firstX);
-            values[i + 1] = target.position.y + (track.values[i + 1] - firstY);
-            values[i + 2] = target.position.z + (track.values[i + 2] - firstZ);
-          }
-          return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
-        }
-      }
-      return null;
-    }
-
-    return track;
-  }).filter(Boolean);
-
-  clone.resetDuration();
-  return clone;
-}
-
-function getTrackValueAtTime(track, time) {
-  if (!track || !track.times.length) return null;
-  const times = track.times;
-  const values = track.values;
-  const stride = track.values.length / track.times.length;
-
-  if (time <= times[0]) return Array.from(values.slice(0, stride));
-  if (time >= times[times.length - 1]) return Array.from(values.slice(values.length - stride));
-
-  let i = 0;
-  while (i < times.length - 1 && time > times[i + 1]) i += 1;
-
-  const t0 = times[i];
-  const t1 = times[i + 1];
-  const alpha = (time - t0) / (t1 - t0);
-  const strideOffset0 = i * stride;
-  const strideOffset1 = (i + 1) * stride;
-  const result = [];
-  for (let j = 0; j < stride; j += 1) {
-    result.push(values[strideOffset0 + j] + alpha * (values[strideOffset1 + j] - values[strideOffset0 + j]));
-  }
-  return result;
-}
-
-function calculateClipRootCycle(clip) {
-  const cacheKey = "_editorRootCycleData";
-  if (clip[cacheKey]) return clip[cacheKey];
-
-  const posTrack = clip.tracks.find((track) => track.name === "Root.position");
-  const rotTrack = clip.tracks.find((track) => track.name === "Root.quaternion" || track.name === "Root.rotation");
-  const startPosition = new THREE.Vector3();
-  const endPosition = new THREE.Vector3();
-  const startRotation = new THREE.Quaternion();
-  const endRotation = new THREE.Quaternion();
-
-  if (posTrack) {
-    const start = getTrackValueAtTime(posTrack, 0);
-    const end = getTrackValueAtTime(posTrack, clip.duration);
-    if (start) startPosition.fromArray(start);
-    if (end) endPosition.fromArray(end);
-  }
-
-  if (rotTrack) {
-    const start = getTrackValueAtTime(rotTrack, 0);
-    const end = getTrackValueAtTime(rotTrack, clip.duration);
-    applyRotationSample(startRotation, start);
-    applyRotationSample(endRotation, end);
-  }
-
-  clip[cacheKey] = {
-    startPosition,
-    endPosition,
-    cyclePosition: endPosition.clone().sub(startPosition),
-    startRotation,
-    endRotation,
-    cycleRotation: startRotation.clone().invert().premultiply(endRotation),
-  };
-  return clip[cacheKey];
-}
-
-function sampleClipRootMotion(clip, time) {
-  const posTrack = clip.tracks.find((track) => track.name === "Root.position");
-  const rotTrack = clip.tracks.find((track) => track.name === "Root.quaternion" || track.name === "Root.rotation");
-  const sampleTime = clip.duration > 0 ? THREE.MathUtils.clamp(time, 0, clip.duration) : 0;
-  const position = new THREE.Vector3();
-  const quaternion = new THREE.Quaternion();
-
-  if (posTrack) {
-    const value = getTrackValueAtTime(posTrack, sampleTime);
-    if (value) position.fromArray(value);
-  }
-  if (rotTrack) applyRotationSample(quaternion, getTrackValueAtTime(rotTrack, sampleTime));
-
-  return { position, quaternion };
-}
-
-function getDetrendedRootPose(clip, time, config = {}) {
-  const sample = sampleClipRootMotion(clip, time).position;
-  const cycleData = calculateClipRootCycle(clip);
-  if (clip.duration <= 0) return sample;
-
-  const alpha = THREE.MathUtils.clamp(time / clip.duration, 0, 1);
-  if (config.bakeIntoPoseXZ !== false) {
-    sample.x -= cycleData.cyclePosition.x * alpha;
-    sample.z -= cycleData.cyclePosition.z * alpha;
-  }
-  if (config.bakeIntoPoseY) {
-    sample.y -= cycleData.cyclePosition.y * alpha;
-  }
-
-  const swayScale = config.rootSwayScale ?? 1;
-  if (swayScale < 1) {
-    sample.x = cycleData.startPosition.x + (sample.x - cycleData.startPosition.x) * swayScale;
-    sample.y = cycleData.startPosition.y + (sample.y - cycleData.startPosition.y) * swayScale;
-    sample.z = cycleData.startPosition.z + (sample.z - cycleData.startPosition.z) * swayScale;
-  }
-  return sample;
-}
-
-function getRootPoseQuaternion(clip, time, config = {}, anchorQuaternion = new THREE.Quaternion()) {
-  if (!config.rootPoseRotation) return anchorQuaternion.clone();
-
-  const cycleData = calculateClipRootCycle(clip);
-  const currRot = sampleClipRootMotion(clip, time).quaternion;
-  const deltaRot = cycleData.startRotation.clone().invert().premultiply(currRot);
-  const poseRot = deltaRot.multiply(anchorQuaternion).normalize();
-  const scale = THREE.MathUtils.clamp(config.rootPoseRotationScale ?? 1, 0, 1);
-  return anchorQuaternion.clone().slerp(poseRot, scale);
-}
-
-function getRootPoseRotationAnchorQuaternion(clip, config = {}, fallbackQuaternion = new THREE.Quaternion()) {
-  if (config.rootPoseRotationAnchor === "clipStart") {
-    return sampleClipRootMotion(clip, 0).quaternion;
-  }
-  return fallbackQuaternion.clone();
-}
-
-function applyRotationSample(quaternion, value) {
-  if (value?.length === 4) {
-    quaternion.fromArray(value).normalize();
-  } else if (value?.length === 3) {
-    quaternion.setFromEuler(new THREE.Euler().fromArray(value));
-  }
 }
 
 function normalizeModel(model) {
@@ -1814,17 +1664,8 @@ function createRootMarker() {
   return group;
 }
 
-function getTrackTargetName(trackName) {
-  const dotIndex = trackName.lastIndexOf(".");
-  return dotIndex === -1 ? trackName : trackName.slice(0, dotIndex);
-}
-
-function isRotationTrack(trackName) {
-  return trackName.endsWith(".rotation") || trackName.endsWith(".quaternion");
-}
-
 function currentConfig() {
-  return ensureActionConfig(editor.selectedActionName);
+  return motionConfig[editor.selectedActionName] || {};
 }
 
 function ensureActionConfig(actionName) {

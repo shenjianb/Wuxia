@@ -10,6 +10,7 @@
     "assets:glb": "powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/build-glb-assets.ps1"
   },
   "dependencies": {
+    "lucide": "^1.61.0",
     "three": "^0.181.1",
     "vite": "^7.2.4"
   }

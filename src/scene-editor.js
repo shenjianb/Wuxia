@@ -16,6 +16,8 @@ import {
 import { LayerManager, ColorPalette } from "./vertex-color-layers.js";
 import { ObjectManager } from "./object-placement.js";
 import "./scene-editor.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
 
 const DEFAULT_GRID = 64;
 const DEFAULT_SIZE = 64;
@@ -70,6 +72,7 @@ boot();
 
 async function boot() {
   mountUI();
+  initializeEditorUi();
   bindUI();
 
   try {
@@ -107,7 +110,7 @@ function mountUI() {
         </div>
         <div class="new-scene-row">
           <input data-new-scene-name type="text" placeholder="新建场景名..." />
-          <button data-new-scene type="button">新建</button>
+          <button data-new-scene data-icon="plus" data-label="新建场景" aria-label="新建场景" title="新建场景" type="button">新建</button>
         </div>
         <div class="scene-list" data-scene-list></div>
       </aside>
@@ -116,9 +119,9 @@ function mountUI() {
         <section class="preview-stage" data-viewport>
           <div class="status-pill" data-status>准备中...</div>
           <div class="viewport-toggles">
-            <button class="toggle-button" type="button" data-toggle-wireframe>网格</button>
+            <button class="toggle-button" type="button" data-toggle-wireframe data-icon="grid-2x2" data-label="网格" aria-label="网格" title="网格" aria-pressed="false">网格</button>
             <div class="light-toggle-wrapper">
-              <button class="toggle-button active" type="button" data-toggle-lighting>平行光</button>
+              <button class="toggle-button active" type="button" data-toggle-lighting data-icon="sun" data-label="平行光" aria-label="平行光" title="平行光" aria-pressed="true">平行光</button>
               <div class="light-dropdown" data-light-dropdown>
                 <canvas class="light-sphere" data-light-sphere width="80" height="80"></canvas>
                 <div class="light-sliders">
@@ -146,7 +149,7 @@ function mountUI() {
             <h1 data-panel-title>场景编辑器</h1>
             <span data-panel-subtitle>工具 & 属性</span>
           </div>
-          <button class="save-button" data-save-scene2 type="button">保存</button>
+          <button class="save-button" data-save-scene2 data-icon="save" data-label="保存场景" aria-label="保存场景" title="保存场景" type="button">保存</button>
         </div>
         <div class="field-scroll" data-field-scroll></div>
       </aside>
@@ -339,6 +342,10 @@ function renderSceneList(existing) {
     const delBtn = document.createElement("button");
     delBtn.className = "delete-scene-button";
     delBtn.textContent = "删除";
+    delBtn.dataset.icon = "trash-2";
+    delBtn.dataset.label = `删除场景 ${s.name}`;
+    delBtn.setAttribute("aria-label", delBtn.dataset.label);
+    delBtn.title = delBtn.dataset.label;
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       deleteScene(s.name);
@@ -483,6 +490,7 @@ async function deleteScene(name) {
 function toggleWireframe() {
   editor.showWireframe = !editor.showWireframe;
   refs.toggleWireframe.classList.toggle("active", editor.showWireframe);
+  refs.toggleWireframe.setAttribute("aria-pressed", String(editor.showWireframe));
   if (terrainWireframe) terrainWireframe.visible = editor.showWireframe;
   objectManager.toggleWireframes(editor.showWireframe);
   if (worldGrid) worldGrid.visible = editor.showWireframe;
@@ -619,6 +627,11 @@ function createEditModeSection() {
   modes.forEach((m) => {
     const btn = document.createElement("button");
     btn.textContent = m.label;
+    btn.dataset.icon = { terrain: "mountain", color: "paintbrush", select: "mouse-pointer-2" }[m.key];
+    btn.dataset.label = m.label;
+    btn.setAttribute("aria-label", m.label);
+    btn.title = m.label;
+    btn.setAttribute("aria-pressed", String(m.key === editor.editMode));
     btn.dataset.editMode = m.key;
     btn.addEventListener("click", () => {
       editor.editMode = m.key;
@@ -659,10 +672,16 @@ function createTerrainToolSection() {
   ["raise", "lower", "flatten"].forEach((t) => {
     const btn = document.createElement("button");
     btn.textContent = { raise: "升", lower: "降", flatten: "抹平" }[t];
+    btn.dataset.icon = { raise: "arrow-up", lower: "arrow-down", flatten: "equal" }[t];
+    btn.dataset.label = { raise: "升高地形", lower: "降低地形", flatten: "抹平地形" }[t];
+    btn.setAttribute("aria-label", btn.dataset.label);
+    btn.title = btn.dataset.label;
+    btn.setAttribute("aria-pressed", String(t === editor.terrainTool));
     btn.dataset.terrainTool = t;
     btn.addEventListener("click", () => {
       editor.terrainTool = t;
       editor.terrainToolEls.forEach((b) => b.classList.toggle("active-tool", b.dataset.terrainTool === t));
+      editor.terrainToolEls.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.terrainTool === t)));
     });
     if (t === editor.terrainTool) btn.classList.add("active-tool");
     toolRow.appendChild(btn);
@@ -709,10 +728,16 @@ function createColorToolSection() {
   ["paint", "erase"].forEach((t) => {
     const btn = document.createElement("button");
     btn.textContent = { paint: "笔刷", erase: "橡皮擦" }[t];
+    btn.dataset.icon = { paint: "paintbrush", erase: "eraser" }[t];
+    btn.dataset.label = { paint: "笔刷", erase: "橡皮擦" }[t];
+    btn.setAttribute("aria-label", btn.dataset.label);
+    btn.title = btn.dataset.label;
+    btn.setAttribute("aria-pressed", String(t === editor.colorTool));
     btn.dataset.colorTool = t;
     btn.addEventListener("click", () => {
       editor.colorTool = t;
       editor.colorToolEls.forEach((b) => b.classList.toggle("active-tool", b.dataset.colorTool === t));
+      editor.colorToolEls.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.colorTool === t)));
     });
     if (t === editor.colorTool) btn.classList.add("active-tool");
     toolRow.appendChild(btn);
@@ -830,7 +855,10 @@ function renderLayersPanel() {
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "删";
-    delBtn.title = "删除图层";
+    delBtn.dataset.icon = "trash-2";
+    delBtn.dataset.label = `删除图层 ${layer.name}`;
+    delBtn.setAttribute("aria-label", delBtn.dataset.label);
+    delBtn.title = delBtn.dataset.label;
     delBtn.addEventListener("click", () => {
       if (layerManager.getLayerList().length <= 1) {
         setStatus("必须保留至少一个图层", "bad");
@@ -948,6 +976,10 @@ function renderObjectList() {
     const delBtn = document.createElement("button");
     delBtn.className = "delete-obj-button";
     delBtn.textContent = "删";
+    delBtn.dataset.icon = "trash-2";
+    delBtn.dataset.label = `删除物件 ${typeLabel} (${obj.id.slice(-4)})`;
+    delBtn.setAttribute("aria-label", delBtn.dataset.label);
+    delBtn.title = delBtn.dataset.label;
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       objectManager.removeObject(obj.id);
@@ -995,6 +1027,10 @@ function renderObjectProps() {
   const resetRotBtn = document.createElement("button");
   resetRotBtn.className = "reset-button";
   resetRotBtn.textContent = "重置旋转";
+  resetRotBtn.dataset.icon = "rotate-ccw";
+  resetRotBtn.dataset.label = "重置旋转";
+  resetRotBtn.setAttribute("aria-label", "重置旋转");
+  resetRotBtn.title = "重置旋转";
   resetRotBtn.addEventListener("click", () => {
     objectManager.resetRotation(selected.id);
     editor.dirty = true;
@@ -1023,6 +1059,10 @@ function renderObjectProps() {
   const resetScaleBtn = document.createElement("button");
   resetScaleBtn.className = "reset-button";
   resetScaleBtn.textContent = "重置大小";
+  resetScaleBtn.dataset.icon = "rotate-ccw";
+  resetScaleBtn.dataset.label = "重置大小";
+  resetScaleBtn.setAttribute("aria-label", "重置大小");
+  resetScaleBtn.title = "重置大小";
   resetScaleBtn.style.marginBottom = "8px";
   resetScaleBtn.addEventListener("click", () => {
     objectManager.resetScale(selected.id);
@@ -1043,6 +1083,10 @@ function renderObjectProps() {
   delBtn.style.width = "100%";
   delBtn.style.marginTop = "8px";
   delBtn.textContent = "删除物件";
+  delBtn.dataset.icon = "trash-2";
+  delBtn.dataset.label = "删除所选物件";
+  delBtn.setAttribute("aria-label", "删除所选物件");
+  delBtn.title = "删除所选物件";
   delBtn.addEventListener("click", () => {
     objectManager.removeObject(selected.id);
     editor.dirty = true;
@@ -1091,6 +1135,9 @@ function buildVector3Control(prefix, vec, onChange) {
     const btn = document.createElement("button");
     btn.className = "nudge-btn";
     btn.textContent = n.label;
+    btn.dataset.label = `${prefix} ${n.label}`;
+    btn.setAttribute("aria-label", btn.dataset.label);
+    btn.title = btn.dataset.label;
     btn.addEventListener("click", () => {
       vec[n.axis] += n.delta;
       vec[n.axis] = parseFloat(vec[n.axis].toFixed(2));
@@ -1495,6 +1542,11 @@ function updateLightSphere() {
 
 function toggleLightingMode() {
   editor.lightingMode = editor.lightingMode === "flat" ? "directional" : "flat";
+  refs.toggleLighting.setAttribute("aria-pressed", String(editor.lightingMode === "directional"));
+  refs.toggleLighting.dataset.icon = editor.lightingMode === "flat" ? "sun-dim" : "sun";
+  refs.toggleLighting.dataset.label = editor.lightingMode === "flat" ? "无光" : "平行光";
+  refs.toggleLighting.setAttribute("aria-label", refs.toggleLighting.dataset.label);
+  refs.toggleLighting.title = refs.toggleLighting.dataset.label;
   if (editor.lightingMode === "flat") {
     hemiLight.visible = false;
     keyLight.visible = false;

@@ -18,3 +18,13 @@ Use project-level skills for:
 - Debugging procedures
 
 When creating a new project skill, use lowercase hyphen-case names and include any detailed notes under that skill's `references` directory.
+
+Use relevant project skills once at the start of a new conversation or after a context reset when the task touches that skill's area. Do not re-invoke the same skill for every message in an already-oriented conversation.
+
+For important handoffs, explicitly invoke the skill in the first prompt, for example:
+
+```text
+Use $wuxia-web3d-animation and read the project-level skill before working on D:\Wuxia_Web.
+```
+
+Do not rely only on automatic trigger-based loading for vague prompts such as "continue" or "fix this".

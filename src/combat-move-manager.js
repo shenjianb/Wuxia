@@ -1,7 +1,12 @@
 export const COMBAT_MOVE_DIRECTIONS = [
   { id: "forward", label: "前向", key: "W", inputCode: "KeyW" },
+  { id: "leftForward", label: "左前", key: "W+A" },
   { id: "left", label: "左向", key: "A", inputCode: "KeyA" },
+  { id: "leftBack", label: "左后", key: "S+A" },
+  { id: "back", label: "后向", key: "S", inputCode: "KeyS" },
+  { id: "rightBack", label: "右后", key: "S+D" },
   { id: "right", label: "右向", key: "D", inputCode: "KeyD" },
+  { id: "rightForward", label: "右前", key: "W+D" },
 ];
 
 export const DEFAULT_HITSTUN_DURATION = 0.3;
@@ -105,7 +110,7 @@ export function normalizeCombatMoveManager(value = {}) {
     ? value.directions
     : {};
   const normalized = {
-    version: 1,
+    version: 2,
     directions: {},
   };
 
@@ -116,6 +121,7 @@ export function normalizeCombatMoveManager(value = {}) {
       id: definition.id,
       label: source.label || definition.label,
       key: source.key || definition.key,
+      defaultMoveId: String(source.defaultMoveId || ""),
       moves: moves.map((move, index) => normalizeCombatMove(move, definition.id, index)),
     };
   });
@@ -224,8 +230,6 @@ export function normalizeMoveImpact(value = {}) {
 
 export function normalizeCombatDirection(value) {
   if (COMBAT_MOVE_DIRECTION_IDS.includes(value)) return value;
-  if (value === "leftBack") return "left";
-  if (value === "rightBack") return "right";
   return "forward";
 }
 
@@ -267,6 +271,15 @@ export function chooseWeightedCombatMove(moves, random = Math.random) {
     if (roll <= 0) return move;
   }
   return candidates[candidates.length - 1] ?? null;
+}
+
+export function selectCombatMove(manager, direction, available, preferredMove = null, random = Math.random) {
+  const moves = getCombatMovesForDirection(manager, direction).filter(available);
+  const weighted = chooseWeightedCombatMove(moves, random);
+  if (weighted) return weighted;
+  const defaultId = manager?.directions?.[direction]?.defaultMoveId;
+  return moves.find((move) => move.id === defaultId)
+    || moves.find((move) => move.id === preferredMove?.id) || moves[0] || null;
 }
 
 export function actionNameFromAnimationFile(fileName) {

@@ -17,6 +17,8 @@ import {
 } from "./combat-move-manager.js";
 import { evaluateNpcBrain } from "./npc-ai-runtime.js";
 import "./behavior-editor.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
 
 const ENTRY_NODE_ID = "entry";
 const BUILTIN_MODE_KEYS = new Set(BEHAVIOR_MODE_TYPES.map((mode) => mode.key));
@@ -433,6 +435,7 @@ const editor = {
 };
 
 const refs = {};
+let graphFitFrame = 0;
 
 window.__BEHAVIOR_EDITOR_READY = false;
 window.__BEHAVIOR_EDITOR_ERROR = null;
@@ -441,6 +444,7 @@ boot();
 
 async function boot() {
   mountUI();
+  initializeEditorUi();
   bindUI();
 
   const params = new URLSearchParams(window.location.search);
@@ -470,7 +474,7 @@ function mountUI() {
         </div>
         <div class="new-npc-row">
           <input data-new-tree-name type="text" placeholder="新建行为树名称..." />
-          <button data-new-tree-btn type="button">新建</button>
+          <button data-new-tree-btn data-icon="plus" data-label="新建行为树" aria-label="新建行为树" title="新建行为树" type="button">新建</button>
         </div>
         <div class="section-header"><span>行为树配置列表</span></div>
         <div class="npc-list" data-tree-list></div>
@@ -482,13 +486,15 @@ function mountUI() {
             <span>行为模式</span>
             <select data-mode-select></select>
           </label>
-          <button class="mode-action" data-add-mode type="button">+ 模式</button>
-          <button class="mode-action danger" data-delete-mode type="button">删除</button>
+          <button class="mode-action" data-add-mode data-icon="plus" data-label="添加行为模式" aria-label="添加行为模式" title="添加行为模式" type="button">+ 模式</button>
+          <button class="mode-action danger" data-delete-mode data-icon="trash-2" data-label="删除行为模式" aria-label="删除行为模式" title="删除行为模式" type="button">删除</button>
+          <button class="mode-action" data-toggle-brain data-icon="brain" data-label="大脑配置" aria-label="大脑配置" title="大脑配置" aria-expanded="true" aria-controls="behavior-brain-dock" type="button">大脑配置</button>
+          <button class="mode-action" data-fit-graph data-icon="scan" data-label="适配视图" aria-label="适配视图" title="适配视图" type="button">适配视图</button>
           <div class="spacer"></div>
           <span class="zoom-info" data-zoom-info>100%</span>
         </div>
         <div class="graph-canvas" data-graph-canvas>
-          <aside class="brain-dock" data-brain-dock></aside>
+          <aside class="brain-dock" id="behavior-brain-dock" data-brain-dock></aside>
           <div class="status-pill" data-status>选择或创建行为树开始编辑</div>
           <svg data-svg-layer></svg>
           <div class="graph-nodes" data-graph-nodes></div>
@@ -504,12 +510,12 @@ function mountUI() {
             <h1 data-panel-title>属性面板</h1>
             <span data-panel-subtitle></span>
           </div>
-          <button class="save-button" data-btn-save type="button">保存</button>
+          <button class="save-button" data-btn-save data-icon="save" data-label="保存" aria-label="保存" title="保存" type="button">保存</button>
         </div>
         <div class="panel-tabs">
-          <button class="panel-tab active" data-panel-tab="node" type="button">节点</button>
-          <button class="panel-tab" data-panel-tab="transition" type="button">跳转</button>
-          <button class="panel-tab" data-panel-tab="blackboard" type="button">黑板</button>
+          <button class="panel-tab active" data-panel-tab="node" aria-pressed="true" type="button">节点</button>
+          <button class="panel-tab" data-panel-tab="transition" aria-pressed="false" type="button">跳转</button>
+          <button class="panel-tab" data-panel-tab="blackboard" aria-pressed="false" type="button">黑板</button>
         </div>
         <div class="field-scroll" data-field-scroll></div>
       </aside>
@@ -518,6 +524,15 @@ function mountUI() {
   refs.treeList = app.querySelector("[data-tree-list]");
   refs.status = app.querySelector("[data-status]");
   refs.brainDock = app.querySelector("[data-brain-dock]");
+  refs.toggleBrain = app.querySelector("[data-toggle-brain]");
+  const mobileViewport = window.matchMedia("(max-width: 860px)");
+  const updateBrainDockViewport = () => {
+    refs.brainDock.hidden = mobileViewport.matches;
+    refs.toggleBrain.setAttribute("aria-expanded", String(!refs.brainDock.hidden));
+    scheduleGraphFit();
+  };
+  updateBrainDockViewport();
+  mobileViewport.addEventListener("change", updateBrainDockViewport);
   refs.graphCanvas = app.querySelector("[data-graph-canvas]");
   refs.svgLayer = app.querySelector("[data-svg-layer]");
   refs.graphNodes = app.querySelector("[data-graph-nodes]");
@@ -535,6 +550,13 @@ function mountUI() {
 }
 
 function bindUI() {
+  refs.graphCanvas.ownerDocument.defaultView.addEventListener("resize", scheduleGraphFit);
+  document.querySelector("[data-fit-graph]").addEventListener("click", scheduleGraphFit);
+  refs.toggleBrain.addEventListener("click", () => {
+    refs.brainDock.hidden = !refs.brainDock.hidden;
+    refs.toggleBrain.setAttribute("aria-expanded", String(!refs.brainDock.hidden));
+    scheduleGraphFit();
+  });
   refs.modeSelect.addEventListener("change", () => {
     editor.activeTree = refs.modeSelect.value;
     editor.selectedNodeId = null;
@@ -542,6 +564,7 @@ function bindUI() {
     renderModeSelect();
     renderGraph();
     renderPropertyPanel();
+    scheduleGraphFit();
   });
   refs.addModeBtn.addEventListener("click", addBehaviorMode);
   refs.deleteModeBtn.addEventListener("click", deleteBehaviorMode);
@@ -719,6 +742,10 @@ function renderTreeList() {
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "delete-tree-button";
     deleteBtn.textContent = "删除";
+    deleteBtn.dataset.icon = "trash-2";
+    deleteBtn.dataset.label = `删除行为树 ${tree.name || tree.id}`;
+    deleteBtn.setAttribute("aria-label", deleteBtn.dataset.label);
+    deleteBtn.title = deleteBtn.dataset.label;
     deleteBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       deleteTree(tree.id);
@@ -814,6 +841,7 @@ async function selectTree(treeId) {
   updateSaveButton();
   renderGraph();
   renderPropertyPanel();
+  scheduleGraphFit();
 }
 
 async function saveBehaviorTree() {
@@ -1134,6 +1162,7 @@ function addBehaviorMode() {
   renderModeSelect();
   renderGraph();
   renderPropertyPanel();
+  scheduleGraphFit();
 }
 
 function deleteBehaviorMode() {
@@ -1149,6 +1178,7 @@ function deleteBehaviorMode() {
   renderModeSelect();
   renderGraph();
   renderPropertyPanel();
+  scheduleGraphFit();
 }
 
 function getModeDefinitions() {
@@ -1443,6 +1473,41 @@ function onCanvasWheel(event) {
   renderGraphNodesTransform();
 }
 
+function scheduleGraphFit() {
+  if (graphFitFrame) return;
+  graphFitFrame = requestAnimationFrame(() => {
+    graphFitFrame = 0;
+    fitGraphToView();
+  });
+}
+
+function fitGraphToView() {
+  const nodes = Array.from(refs.graphNodes.children);
+  if (!nodes.length) return;
+  const canvas = refs.graphCanvas.getBoundingClientRect();
+  const padding = 16;
+  let left = padding;
+  let top = padding;
+  const status = refs.status.getBoundingClientRect();
+  if (status.width && status.height) top = Math.max(top, status.bottom - canvas.top + padding);
+  if (!refs.brainDock.hidden) {
+    const dock = refs.brainDock.getBoundingClientRect();
+    if (dock.width && dock.height) left = Math.max(left, dock.right - canvas.left + padding);
+  }
+  const width = refs.graphCanvas.clientWidth - left - padding;
+  const height = refs.graphCanvas.clientHeight - top - padding;
+  if (width <= 0 || height <= 0) return;
+  const minX = Math.min(...nodes.map((node) => node.offsetLeft));
+  const minY = Math.min(...nodes.map((node) => node.offsetTop));
+  const maxX = Math.max(...nodes.map((node) => node.offsetLeft + node.offsetWidth));
+  const maxY = Math.max(...nodes.map((node) => node.offsetTop + node.offsetHeight));
+  editor.canvasScale = Math.max(0.3, Math.min(1, width / Math.max(1, maxX - minX), height / Math.max(1, maxY - minY)));
+  editor.canvasOffset.x = left + (width - (maxX - minX) * editor.canvasScale) / 2 - minX * editor.canvasScale;
+  editor.canvasOffset.y = top + (height - (maxY - minY) * editor.canvasScale) / 2 - minY * editor.canvasScale;
+  refs.zoomInfo.textContent = `${Math.round(editor.canvasScale * 100)}%`;
+  renderGraphNodesTransform();
+}
+
 function renderGraphNodesTransform() {
   const transform = `translate(${editor.canvasOffset.x}px, ${editor.canvasOffset.y}px) scale(${editor.canvasScale})`;
   refs.graphNodes.style.transform = transform;
@@ -1621,6 +1686,7 @@ function onCanvasContextMenu(event) {
 }
 
 function renderPropertyPanel() {
+  refs.panelTabs.forEach((tab) => tab.setAttribute("aria-pressed", String(tab.dataset.panelTab === editor.activeTab)));
   refs.fieldScroll.innerHTML = "";
   renderBrainDock();
 
@@ -2008,6 +2074,10 @@ function createProfileRow({ title, description, type, refKey, profiles, currentI
   refreshBtn.type = "button";
   refreshBtn.className = "btn-add";
   refreshBtn.textContent = "刷新";
+  refreshBtn.dataset.icon = "refresh-cw";
+  refreshBtn.dataset.label = "刷新模板列表";
+  refreshBtn.setAttribute("aria-label", refreshBtn.dataset.label);
+  refreshBtn.title = refreshBtn.dataset.label;
   refreshBtn.addEventListener("click", async () => {
     await loadAiProfileLists();
     renderPropertyPanel();
@@ -2771,6 +2841,10 @@ function createRemoveButton(onClick) {
   button.className = "btn-remove";
   button.type = "button";
   button.textContent = "x";
+  button.dataset.icon = "x";
+  button.dataset.label = "移除";
+  button.setAttribute("aria-label", "移除");
+  button.title = "移除";
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2846,6 +2920,9 @@ function setDirty() {
 function updateSaveButton() {
   refs.btnSave.classList.toggle("dirty", editor.dirty);
   refs.btnSave.textContent = editor.dirty ? "保存 *" : "保存";
+  refs.btnSave.dataset.label = editor.dirty ? "保存（未保存更改）" : "保存";
+  refs.btnSave.setAttribute("aria-label", refs.btnSave.dataset.label);
+  refs.btnSave.title = refs.btnSave.dataset.label;
 }
 
 function setStatus(message, type) {

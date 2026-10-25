@@ -3,7 +3,20 @@ import { createSafeRenderer } from "./renderer-utils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { normalizeInterruptWindow } from "./combat-controls.js";
+import { normalizeCombatMoveManager, getCombatMoveActionNames } from "./combat-move-manager.js";
+import {
+  applyPreviewPose as applySharedPreviewPose,
+  filterAnimationTracks,
+  computeAnimNaturalSpeed,
+  getPlaybackScale,
+  getPlaybackPolicy,
+} from "./animation-motion.js";
 import "./model-editor.css";
+import "./editor-theme.css";
+import { initializeEditorUi } from "./editor-ui.js";
+
+let gameplayAttackNames = null;
 
 const ASSET_VERSION = "model-editor-20260608-01";
 const assetUrl = (path) => `${path}?v=${ASSET_VERSION}`;
@@ -69,6 +82,7 @@ const FUTURE_FEATURES = [
 
 const loader = new GLTFLoader();
 const clock = new THREE.Clock();
+const lastPreviewFollowPosition = new THREE.Vector3();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const scratchVector = new THREE.Vector3();
@@ -121,6 +135,7 @@ boot();
 
 async function boot() {
   mountUi();
+  initializeEditorUi();
   bindUi();
 
   try {
@@ -129,6 +144,7 @@ async function boot() {
 
     setStatus("加载动作配置...");
     motionConfig = await loadMotionConfig();
+    gameplayAttackNames = await loadGameplayAttackNames();
     animationAssetFiles = await loadAnimationAssetFiles();
     registerAnimationAssets();
     editor.selectedActionName = pickInitialAction();
@@ -252,6 +268,7 @@ function bindUi() {
   refs.play.addEventListener("click", () => {
     editor.playing = !editor.playing;
     updatePlayButton();
+    updateDebugState();
   });
   refs.stop.addEventListener("click", () => {
     editor.playing = false;
@@ -387,6 +404,7 @@ async function createCharacter(model) {
     mixer: new THREE.AnimationMixer(gltf.scene),
     meshes,
     skeletonOverlay,
+    restModel: captureRestModel(gltf.scene),
     rootRestPosition,
     rootRestQuaternion,
     sceneRestRotationY: gltf.scene.rotation.y,
@@ -427,6 +445,11 @@ function selectModel(modelId) {
 
 async function selectAction(actionName) {
   if (!actionName) return;
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
+  activeAction = null;
+  activeClip = null;
+  editor.duration = 0;
   editor.selectedActionName = actionName;
   refs.actionSelect.value = actionName;
   editor.time = 0;
@@ -436,9 +459,11 @@ async function selectAction(actionName) {
       setStatus(`加载动作 ${actionName}...`);
       await loadAnimationAction(actionName);
     }
+    if (editor.selectedActionName !== actionName) return;
     rebuildPreviewAction(false);
     setStatus("预览就绪", "saved");
   } catch (error) {
+    if (editor.selectedActionName !== actionName) return;
     setStatus(`动作加载失败：${error.message}`, "bad");
   }
 }
@@ -461,10 +486,12 @@ function rebuildPreviewAction(preserveTime = true) {
   const previousTime = preserveTime ? editor.time : 0;
   const config = currentMotionConfig();
   activeClip = animations[editor.selectedActionName];
-  activeFilteredClip = filterAnimationTracks(activeClip, activeCharacter.scene, config);
+  activeFilteredClip = filterAnimationTracks(activeClip, activeCharacter.restModel, motionConfig[editor.selectedActionName]);
   editor.duration = activeClip.duration || activeFilteredClip.duration || 0;
   editor.time = normalizePreviewTime(previousTime);
 
+  activeAction?.stop();
+  if (activeAction) activeAction.getMixer().uncacheAction(activeAction.getClip());
   activeCharacter.mixer.stopAllAction();
   activeAction = activeCharacter.mixer.clipAction(activeFilteredClip);
   activeAction.enabled = true;
@@ -476,6 +503,16 @@ function rebuildPreviewAction(preserveTime = true) {
   applyPreviewPose();
 }
 
+function followPreviewRoot() {
+  if (!activeCharacter || !camera || !orbitControls) return;
+  const position = activeCharacter.root.getWorldPosition(new THREE.Vector3());
+  position.y = 0;
+  const delta = position.clone().sub(lastPreviewFollowPosition);
+  camera.position.add(delta);
+  orbitControls.target.add(delta);
+  lastPreviewFollowPosition.copy(position);
+}
+
 function applyPreviewPose() {
   if (!activeCharacter) {
     updateTimelineUi();
@@ -485,23 +522,13 @@ function applyPreviewPose() {
 
   const config = currentMotionConfig();
   const time = normalizePreviewTime(editor.time);
-  const visualYaw = THREE.MathUtils.degToRad(config.visualYawOffsetDegrees ?? 0);
-
-  activeCharacter.root.position.set(0, 0, 0);
-  activeCharacter.root.rotation.set(0, PREVIEW_BASE_YAW, 0);
-  activeCharacter.scene.rotation.y = activeCharacter.sceneRestRotationY + visualYaw;
-
-  if (activeAction) {
-    activeAction.timeScale = 1;
-    activeCharacter.mixer.setTime(time);
+  if (activeAction && activeClip) {
+    applySharedPreviewPose(activeCharacter, activeAction, activeClip, time, config, {
+      baseYaw: PREVIEW_BASE_YAW,
+      codeMovement: editor.selectedActionName === "walk" || editor.selectedActionName === "combatWalk",
+    });
   }
-
-  const skeletonRoot = activeCharacter.scene.getObjectByName(ROOT_TRACK_NAME);
-  if (skeletonRoot && config.motionMode === "InPlace" && config.bakeIntoPoseRotation !== false) {
-    skeletonRoot.quaternion.copy(activeCharacter.rootRestQuaternion);
-  }
-
-  activeCharacter.root.updateMatrixWorld(true);
+  followPreviewRoot();
   updateSkeletonOverlay(activeCharacter);
   updateTimelineUi();
   updateReadout();
@@ -513,7 +540,7 @@ function update() {
   orbitControls?.update();
 
   if (editor.playing && activeAction && editor.duration > 0) {
-    editor.time += delta;
+    editor.time += delta * getPreviewPlaybackScale();
     if (currentMotionConfig().loop === false && editor.time >= editor.duration) {
       editor.time = editor.duration;
       editor.playing = false;
@@ -1486,15 +1513,7 @@ function pickInitialAction() {
 }
 
 function currentMotionConfig() {
-  return {
-    motionMode: "InPlace",
-    loop: true,
-    bakeIntoPoseXZ: true,
-    bakeIntoPoseY: true,
-    bakeIntoPoseRotation: true,
-    rootSwayScale: 1,
-    ...(motionConfig[editor.selectedActionName] || {}),
-  };
+  return motionConfig[editor.selectedActionName] || {};
 }
 
 async function saveModelConfig() {
@@ -1553,7 +1572,21 @@ function setDirty(dirty) {
 }
 
 function updateSaveButton() {
+  let marker = refs.save.parentElement.querySelector("[data-dirty-indicator]");
+  if (!marker) {
+    marker = document.createElement("span");
+    marker.dataset.dirtyIndicator = "";
+    marker.dataset.icon = "circle-alert";
+    marker.setAttribute("role", "status");
+    marker.setAttribute("aria-live", "polite");
+    refs.save.before(marker);
+  }
+  marker.hidden = !editor.dirty;
+  marker.textContent = editor.dirty ? "未保存" : "";
   refs.save.classList.toggle("dirty", editor.dirty);
+  refs.save.dataset.dirty = String(editor.dirty);
+  refs.save.dataset.icon = "save";
+  refs.save.setAttribute("aria-label", editor.dirty ? "保存：有未保存设置" : "保存：设置已保存");
   refs.save.textContent = editor.dirty ? "保存*" : "保存";
 }
 
@@ -1564,6 +1597,8 @@ function setStatus(text, kind = "") {
 }
 
 function updatePlayButton() {
+  refs.play.dataset.icon = editor.playing ? "pause" : "play";
+  refs.play.setAttribute("aria-label", editor.playing ? "暂停" : "播放");
   refs.play.textContent = editor.playing ? "暂停" : "播放";
 }
 
@@ -1590,11 +1625,46 @@ function updateReadout() {
     <div><span>Bone</span><b>${escapeHtml(boneLabel)}</b></div>
     <div><span>Size</span><b>${formatNumber(size[0])}, ${formatNumber(size[1])}, ${formatNumber(size[2])}</b></div>
     <div><span>Strength</span><b>${formatNumber(strength)}</b></div>
+    <div class="effective-rules" data-effective-rules><span>生效规则</span><b>${escapeHtml(effectiveRuleSummary())}</b></div>
   `;
+}
+
+function effectiveRuleSummary() {
+  const config = currentMotionConfig();
+  const attack = gameplayAttackNames?.has(editor.selectedActionName) ?? false;
+  const policy = getPlaybackPolicy(config, { attack });
+  const interval = normalizeInterruptWindow(config.interruptWindow);
+  const rate = getPreviewPlaybackScale();
+  const rules = [gameplayAttackNames
+    ? `游戏 ${formatNumber(attack ? 1 : rate)}x / ${policy.repetitions === 1 ? "单次" : "循环"}`
+    : `配置循环 ${config.loop === false ? "关闭" : "开启"}`,
+  `预览 ${formatNumber(rate)}x / ${config.loop === false ? "单次" : "循环"}`];
+  if ((editor.selectedActionName === "walk" || editor.selectedActionName === "combatWalk") && activeClip && activeCharacter) {
+    rules.push(`自然速度 ${formatNumber(computeAnimNaturalSpeed(activeClip, activeCharacter))} m/s · 共享速率 ${formatNumber(rate)}x`);
+  }
+  rules.push(interval
+    ? `可打断 ${formatNumber(interval[0] * 100)}%-${formatNumber(interval[1] * 100)}% / ${formatNumber(interval[0] * editor.duration)}-${formatNumber(interval[1] * editor.duration)}s`
+    : "可打断区间 未配置 / 旧版规则");
+  return rules.join(" · ");
+}
+
+async function loadGameplayAttackNames() {
+  for (const url of ["/api/combat-move-manager", assetUrl("./assets/combat/move_manager.json")]) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+      const manager = normalizeCombatMoveManager(await response.json());
+      return new Set(getCombatMoveActionNames(manager));
+    } catch { /* Read-only rule summary can fall back to config values. */ }
+  }
+  return null;
 }
 
 function updateDebugState() {
   window.__MODEL_EDITOR_STATE = {
+    pose: getPreviewPoseMetrics(),
+    playing: editor.playing,
+    config: currentMotionConfig(),
     ready: window.__MODEL_EDITOR_READY,
     selectedModelId: editor.selectedModelId,
     selectedActionName: editor.selectedActionName,
@@ -1618,92 +1688,45 @@ function mergeAnimationClips(clips, name) {
   return new THREE.AnimationClip(name, -1, tracks);
 }
 
-function filterAnimationTracks(clip, model, config = {}) {
-  const resolvedConfig = {
-    motionMode: "InPlace",
-    bakeIntoPoseXZ: true,
-    bakeIntoPoseY: true,
-    bakeIntoPoseRotation: true,
-    ...config,
+function captureRestModel(model) {
+  const nodes = new Map();
+  model.traverse((node) => nodes.set(node.name, { position: node.position.clone() }));
+  return { getObjectByName: (name) => nodes.get(name) };
+}
+
+function getPreviewPlaybackScale() {
+  if (!activeClip || !activeCharacter) return 1;
+  const actionName = editor.selectedActionName;
+  if (actionName !== "walk" && actionName !== "combatWalk") return 1;
+  const config = currentMotionConfig();
+  const speed = Number(config.codeMoveSpeed);
+  if (config.motionMode === "RootMotion" && !(Number.isFinite(speed) && speed >= 0)) return 1;
+  return getPlaybackScale(config, computeAnimNaturalSpeed(activeClip, activeCharacter), { min: 0 });
+}
+
+function getPreviewPoseMetrics() {
+  if (!activeCharacter || !activeAction || !activeClip) return null;
+  const skeletonRoot = activeCharacter.scene.getObjectByName("Root");
+  const hand = activeCharacter.scene.getObjectByName("Bip001_R_Hand");
+  const leftHand = activeCharacter.scene.getObjectByName("Bip001_L_Hand");
+  return {
+    modelId: activeCharacter.model.id,
+    actionName: activeAction.getClip().name,
+    rootPosition: activeCharacter.root.position.toArray(),
+    rootQuaternion: activeCharacter.root.quaternion.toArray(),
+    skeletonRootPosition: skeletonRoot?.position.toArray() ?? null,
+    skeletonRootQuaternion: skeletonRoot?.quaternion.toArray() ?? null,
+    handWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    leftHandWorldPosition: leftHand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    rightHandWorldPosition: hand?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
+    playbackRate: getPreviewPlaybackScale(),
+    playbackPolicy: {
+      codeMovement: editor.selectedActionName === "walk" || editor.selectedActionName === "combatWalk",
+      previewLoop: currentMotionConfig().loop !== false,
+      configuredLoop: currentMotionConfig().loop ?? null,
+      baseYaw: PREVIEW_BASE_YAW,
+    },
   };
-
-  const clone = clip.clone();
-  clone.tracks = clone.tracks.map((track) => {
-    const targetName = getTrackTargetName(track.name);
-    if (track.name.endsWith(".scale")) return null;
-
-    if (targetName === ROOT_TRACK_NAME) {
-      if (isRotationTrack(track.name)) {
-        if (resolvedConfig.motionMode === "InPlace" && resolvedConfig.bakeIntoPoseRotation) return null;
-        if (resolvedConfig.motionMode === "RootMotion" && resolvedConfig.applyRootRotation === false) return null;
-      }
-
-      if (track.name.endsWith(".position") && resolvedConfig.motionMode === "InPlace") {
-        const numKeys = track.times.length;
-        if (numKeys >= 2) {
-          const stride = 3;
-          const values = new track.values.constructor(track.values.length);
-          const duration = track.times[numKeys - 1] - track.times[0];
-          const t0 = track.times[0];
-          const startX = track.values[0];
-          const startY = track.values[1];
-          const startZ = track.values[2];
-          const endIdx = (numKeys - 1) * stride;
-          const endX = track.values[endIdx];
-          const endY = track.values[endIdx + 1];
-          const endZ = track.values[endIdx + 2];
-          const driftRateX = duration > 0 ? (endX - startX) / duration : 0;
-          const driftRateY = duration > 0 ? (endY - startY) / duration : 0;
-          const driftRateZ = duration > 0 ? (endZ - startZ) / duration : 0;
-
-          for (let i = 0; i < numKeys; i += 1) {
-            const t = track.times[i] - t0;
-            values[i * stride] = track.values[i * stride] - (resolvedConfig.bakeIntoPoseXZ ? driftRateX * t : 0);
-            values[i * stride + 1] = track.values[i * stride + 1] - (resolvedConfig.bakeIntoPoseY ? driftRateY * t : 0);
-            values[i * stride + 2] = track.values[i * stride + 2] - (resolvedConfig.bakeIntoPoseXZ ? driftRateZ * t : 0);
-          }
-
-          const swayScale = resolvedConfig.rootSwayScale ?? 1;
-          if (swayScale < 1) {
-            const baseX = values[0];
-            const baseY = values[1];
-            const baseZ = values[2];
-            for (let i = 1; i < numKeys; i += 1) {
-              values[i * stride] = baseX + (values[i * stride] - baseX) * swayScale;
-              values[i * stride + 1] = baseY + (values[i * stride + 1] - baseY) * swayScale;
-              values[i * stride + 2] = baseZ + (values[i * stride + 2] - baseZ) * swayScale;
-            }
-          }
-          return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
-        }
-      }
-    }
-
-    if (targetName !== ROOT_TRACK_NAME && track.name.endsWith(".position")) {
-      if (targetName === "Bip001_Pelvis" || targetName === "Bip001 Pelvis") {
-        const target = model.getObjectByName(targetName);
-        if (target && track.values.length >= 3) {
-          const values = new track.values.constructor(track.values.length);
-          const firstX = track.values[0];
-          const firstY = track.values[1];
-          const firstZ = track.values[2];
-
-          for (let i = 0; i < track.values.length; i += 3) {
-            values[i] = target.position.x + (track.values[i] - firstX);
-            values[i + 1] = target.position.y + (track.values[i + 1] - firstY);
-            values[i + 2] = target.position.z + (track.values[i + 2] - firstZ);
-          }
-          return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
-        }
-      }
-      return null;
-    }
-
-    return track;
-  }).filter(Boolean);
-
-  clone.resetDuration();
-  return clone;
 }
 
 function normalizeModel(model) {
@@ -1809,15 +1832,6 @@ function updateSkeletonOverlay(character) {
   overlay.joints.forEach((joint) => {
     joint.userData.bone.getWorldPosition(joint.position);
   });
-}
-
-function getTrackTargetName(trackName) {
-  const dotIndex = trackName.lastIndexOf(".");
-  return dotIndex === -1 ? trackName : trackName.slice(0, dotIndex);
-}
-
-function isRotationTrack(trackName) {
-  return trackName.endsWith(".rotation") || trackName.endsWith(".quaternion");
 }
 
 function findConfiguredActionNameForAsset(fileName) {
